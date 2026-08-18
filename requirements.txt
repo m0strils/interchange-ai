@@ -1,0 +1,4 @@
+# Interchange — tonight's MVP deps (minimal on purpose).
+# Phase 1 will add: langchain, langgraph, langchain-chroma, fastapi
+anthropic>=0.40
+chromadb>=0.5

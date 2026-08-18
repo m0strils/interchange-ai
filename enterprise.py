@@ -1,0 +1,138 @@
+"""
+Enterprise controls for Interchange — the showcase differentiator.
+
+Adds to the MVP (see enterprise-readiness.md, dimensions 1/2/4/6):
+  - input guardrail:  prompt-injection heuristics + input limits (OWASP LLM01)
+  - output guardrail: grounding check — answers must cite retrieved sources
+  - audit log:        JSONL record of every request (who/what/model/latency/cost)
+  - cost tracking:    token usage -> $ estimate per request, running total
+
+Deliberately dependency-free (stdlib only) so the controls are legible in an
+interview: each function is small enough to read aloud and defend.
+
+Usage (wired into interchange.py):
+    from enterprise import guard_input, guard_output, audit
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import re
+import time
+import uuid
+
+AUDIT_PATH = pathlib.Path(__file__).parent / "audit.jsonl"
+
+# --- 1) input guardrail (OWASP LLM01: prompt injection) --------------------
+# Heuristic first line of defense. Enterprise stack layers this with a
+# classifier (e.g., Bedrock Guardrails / Llama Guard) — documented in README.
+MAX_INPUT_CHARS = 2000
+_INJECTION_PATTERNS = [
+    r"ignore (all|any|previous|prior|above) (instructions|context|rules)",
+    r"disregard (your|the) (system prompt|instructions|rules)",
+    r"you are now\b",
+    r"\bnew (persona|identity|instructions)\b",
+    r"reveal (your|the) (system prompt|instructions|secrets?|api key)",
+    r"\bjailbreak\b",
+    r"\bDAN mode\b",
+    r"pretend (you are|to be)\b",
+    r"output (your|the) (system|hidden) prompt",
+]
+_injection_re = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
+
+
+class GuardrailViolation(Exception):
+    """Raised when a guardrail blocks the request/response."""
+
+
+def guard_input(question: str) -> str:
+    """Validate the user question before it reaches the model."""
+    q = question.strip()
+    if not q:
+        raise GuardrailViolation("empty input")
+    if len(q) > MAX_INPUT_CHARS:
+        raise GuardrailViolation(
+            f"input too long ({len(q)} chars > {MAX_INPUT_CHARS}); possible stuffing attack"
+        )
+    m = _injection_re.search(q)
+    if m:
+        raise GuardrailViolation(f"possible prompt-injection pattern: {m.group(0)!r}")
+    return q
+
+
+# --- 2) output guardrail (grounding / citation check) ----------------------
+def guard_output(answer: str, source_names: list[str]) -> tuple[str, bool]:
+    """
+    Grounding check: the system prompt requires [filename] citations from the
+    retrieved context. If none are present, flag the answer as ungrounded —
+    return it with a visible warning instead of silently passing it through.
+    Returns (possibly annotated answer, grounded: bool).
+    """
+    cited = any(f"[{name}]" in answer for name in source_names)
+    # "don't know" responses are legitimately citation-free
+    refusal = re.search(r"(context does not|don't have|no information|cannot find)", answer, re.I)
+    if cited or refusal:
+        return answer, True
+    return (
+        "⚠️ UNGROUNDED (no source citations — treat as unverified):\n\n" + answer,
+        False,
+    )
+
+
+# --- 3+4) audit log + cost tracking ---------------------------------------
+# Prices per million tokens (update as pricing changes; illustrative defaults).
+_PRICES = {
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
+}
+
+
+def estimate_cost(model: str, in_tokens: int, out_tokens: int) -> float:
+    pin, pout = _PRICES.get(model, (3.00, 15.00))
+    return (in_tokens * pin + out_tokens * pout) / 1_000_000
+
+
+def audit(
+    *,
+    question: str,
+    model: str,
+    sources: list[str],
+    in_tokens: int,
+    out_tokens: int,
+    latency_ms: int,
+    grounded: bool,
+    blocked: str | None = None,
+) -> dict:
+    """Append a governance record for this request; return it."""
+    rec = {
+        "id": str(uuid.uuid4())[:8],
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "question": question[:300],
+        "model": model,
+        "sources": sources,
+        "in_tokens": in_tokens,
+        "out_tokens": out_tokens,
+        "cost_usd": round(estimate_cost(model, in_tokens, out_tokens), 6),
+        "latency_ms": latency_ms,
+        "grounded": grounded,
+        "blocked": blocked,
+    }
+    with AUDIT_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec
+
+
+def audit_summary() -> str:
+    """Running totals for the cost/quality dashboard (CLI `--audit`)."""
+    if not AUDIT_PATH.exists():
+        return "no audit records yet"
+    recs = [json.loads(line) for line in AUDIT_PATH.read_text().splitlines() if line.strip()]
+    total = sum(r.get("cost_usd", 0) for r in recs)
+    blocked = sum(1 for r in recs if r.get("blocked"))
+    ungrounded = sum(1 for r in recs if r.get("grounded") is False)
+    lat = [r["latency_ms"] for r in recs if r.get("latency_ms")]
+    p50 = sorted(lat)[len(lat) // 2] if lat else 0
+    return (
+        f"requests={len(recs)}  blocked={blocked}  ungrounded={ungrounded}  "
+        f"total_cost=${total:.4f}  p50_latency={p50}ms"
+    )

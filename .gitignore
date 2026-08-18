@@ -1,0 +1,8 @@
+# secrets — never commit
+.env
+
+# runtime artifacts
+.chroma/
+audit.jsonl
+__pycache__/
+.venv/
