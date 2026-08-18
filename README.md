@@ -48,6 +48,20 @@ Embeddings run locally (Chroma's default model) — the only external call is
 generation (Claude). Drop your own `.md`/`.txt` domain docs into `docs/` and
 re-index; the included files are illustrative seed content.
 
+### Engines (cost control)
+Generation is pluggable — an enterprise pattern (model/provider routing) in miniature:
+
+```bash
+python interchange.py --ask "..."                      # default: Anthropic SDK (metered API)
+python interchange.py --engine claude-code --ask "..." # headless Claude Code on a Pro/Max subscription ($0 marginal)
+```
+
+`--engine api` gives exact token/cost telemetry and is the standard production
+pattern. `--engine claude-code` shells out to `claude -p`, billing nothing extra
+if you have a Claude subscription (token counts are estimated; shares your
+subscription's usage limits). The audit log records which engine served each
+request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
+
 ## Architecture (MVP)
 
 ```

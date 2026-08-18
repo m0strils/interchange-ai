@@ -102,17 +102,22 @@ def audit(
     latency_ms: int,
     grounded: bool,
     blocked: str | None = None,
+    engine: str = "api",
 ) -> dict:
     """Append a governance record for this request; return it."""
+    # subscription-backed engines (claude-code) have no marginal API cost;
+    # tokens are still recorded (estimated) for capacity awareness.
+    cost = estimate_cost(model, in_tokens, out_tokens) if engine == "api" else 0.0
     rec = {
         "id": str(uuid.uuid4())[:8],
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "question": question[:300],
         "model": model,
+        "engine": engine,
         "sources": sources,
         "in_tokens": in_tokens,
         "out_tokens": out_tokens,
-        "cost_usd": round(estimate_cost(model, in_tokens, out_tokens), 6),
+        "cost_usd": round(cost, 6),
         "latency_ms": latency_ms,
         "grounded": grounded,
         "blocked": blocked,
