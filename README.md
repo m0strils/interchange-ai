@@ -1,15 +1,26 @@
 # Interchange
 
-**An enterprise-grade agentic RAG assistant for the rail / EDI domain.**
+**A governed *knowledge runtime* for the rail / EDI domain — retrieval,
+grounding, and audit as one integrated system.**
 
 In EDI, the ISA/IEA envelope is literally called an *interchange*. In rail, an
 interchange is where railroads exchange traffic. This project sits at both:
-a retrieval-augmented assistant that answers questions about X12/EDI transaction
-sets and rail trading-partner integration — built the way a regulated enterprise
-has to build it, with guardrails, auditability, and cost governance from day one.
+an assistant that answers questions about X12/EDI transaction sets and rail
+trading-partner integration — built the way a regulated enterprise has to build
+it, with guardrails, auditability, and cost governance from day one.
 
 > Built by a rail-industry EDI platform architect as a working demonstration of
 > production-minded agentic AI — not a naive demo.
+
+## Positioning (2026): a knowledge runtime, not a RAG demo
+"Naive RAG" — chunk-and-pray, retrieve-then-generate — is on its way out. The
+durable 2026 pattern is the **knowledge runtime**: retrieval + verification +
+reasoning + access-control + audit as *integrated operations*, with the judgment
+to route between plain retrieval, long-context, and **agentic retrieval** (the
+model inside the loop, deciding when it has enough context). Interchange is built
+to that pattern — the MVP implements the grounded, audited core; agentic
+retrieval, retrieval/long-context routing, and agentic memory are the roadmap
+(and are marked honestly as such in the scorecard below).
 
 ## Why this exists
 Most RAG demos stop at "retrieve → generate." Enterprises can't. This project
@@ -86,9 +97,10 @@ user ──input guardrail──> Claude (context = data, not instructions)
 | Reliability | graceful refusal over hallucination; retries/fallback routing | 🟡 |
 | Cost | per-request estimate + running total; model routing | 🟡 |
 | Deployment | IaC, CI/CD, AWS Bedrock in-VPC | ⬜ |
+| Context/Memory | agentic retrieval, retrieval/long-context routing, agentic memory | ⬜ |
 
 ## Roadmap
-1. **Agentic:** LangGraph agent + an MCP tool server ("look up X12 segment definition"); hybrid retrieval.
+1. **Agentic retrieval:** LangGraph agent + an MCP tool server ("look up X12 segment definition"); hybrid retrieval; the model routes between retrieve / long-context / iterate-until-enough-context (the knowledge-runtime loop).
 2. **Quality gate:** RAGAS eval harness on a golden set; block regressions.
 3. **Observability:** Arize Phoenix tracing.
 4. **Hardening:** classifier-grade guardrails (e.g., Bedrock Guardrails), model routing, caching.
