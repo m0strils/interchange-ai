@@ -63,5 +63,5 @@ ADRs and two lessons (native loop → LangGraph), not one framework adopted on f
 
 ---
 > **Resolved 2026-08-19:** accepted as written — native-loop-first. LangGraph is
-> deferred to a superseding ADR (planned ADR-0007) to be filed when branching
-> state / a second tool genuinely earns the framework.
+> deferred to a future superseding ADR, to be filed when branching state / a
+> second tool genuinely earns the framework.

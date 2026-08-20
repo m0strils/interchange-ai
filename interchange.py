@@ -20,6 +20,7 @@ import argparse
 import glob
 import os
 import pathlib
+import re
 import sys
 
 # --- config ---------------------------------------------------------------
@@ -28,9 +29,11 @@ CHROMA_DIR = str(pathlib.Path(__file__).parent / ".chroma")
 COLLECTION = "edi"
 # Model IDs (2026): "claude-sonnet-5" (balanced), "claude-haiku-4-5-20251001" (cheaper/faster).
 MODEL = os.environ.get("INTERCHANGE_MODEL", "claude-sonnet-5")
-CHUNK_CHARS = 1200          # simple char-based chunking; good enough for the MVP
+CHUNK_CHARS = 1200          # max section-body size before a section is windowed
 CHUNK_OVERLAP = 150
 TOP_K = 4
+RRF_K = 60                  # Reciprocal Rank Fusion constant (Cormack et al.)
+GOLDEN_PATH = pathlib.Path(__file__).parent / "eval" / "golden.jsonl"
 
 SYSTEM_PROMPT = (
     "You are Interchange, an assistant for questions about X12/EDI and rail "
@@ -41,12 +44,47 @@ SYSTEM_PROMPT = (
 
 
 # --- ingest ---------------------------------------------------------------
-def chunk(text: str) -> list[str]:
-    chunks, i = [], 0
-    while i < len(text):
-        chunks.append(text[i : i + CHUNK_CHARS])
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
+
+
+def _char_windows(body: str) -> list[str]:
+    """Split an over-long section body into overlapping char windows so a big
+    section still becomes retrievable-sized chunks (stride = CHUNK_CHARS - overlap)."""
+    if len(body) <= CHUNK_CHARS:
+        return [body]
+    out, i = [], 0
+    while i < len(body):
+        out.append(body[i : i + CHUNK_CHARS])
         i += CHUNK_CHARS - CHUNK_OVERLAP
-    return [c.strip() for c in chunks if c.strip()]
+    return out
+
+
+def chunk(text: str) -> list[dict]:
+    """Structure-aware chunking (ADR-0007): split on Markdown headings so each
+    chunk carries the section it came from — a big win over blind char windows on
+    these heading-organized docs. Returns a list of {"text": str, "section": str}.
+    Content before the first heading is section "preamble"; the heading line stays
+    with its section's text. A section body longer than CHUNK_CHARS is split into
+    overlapping char windows that all keep the same section label. Whitespace-only
+    chunks are dropped."""
+    sections: list[tuple[str, list[str]]] = [("preamble", [])]
+    for line in text.splitlines():
+        m = _HEADING_RE.match(line)
+        if m:
+            sections.append((m.group(1).strip(), [line]))
+        else:
+            sections[-1][1].append(line)
+
+    chunks: list[dict] = []
+    for label, lines in sections:
+        body = "\n".join(lines).strip()
+        if not body:
+            continue
+        for window in _char_windows(body):
+            w = window.strip()
+            if w:
+                chunks.append({"text": w, "section": label})
+    return chunks
 
 
 def build_index():
@@ -70,14 +108,78 @@ def build_index():
         text = pathlib.Path(path).read_text(encoding="utf-8")
         for j, ch in enumerate(chunk(text)):
             ids.append(f"{name}:{j}")
-            docs.append(ch)
-            metas.append({"source": name, "chunk": j})
+            docs.append(ch["text"])
+            metas.append({"source": name, "chunk": j, "section": ch["section"]})
     col.add(ids=ids, documents=docs, metadatas=metas)
     print(f"Indexed {len(docs)} chunks from {len(files)} files -> {CHROMA_DIR}")
 
 
+# --- retrieval primitives (pure, offline, $0) -----------------------------
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def tokenize(text: str) -> list[str]:
+    """Lowercased alphanumeric tokens for BM25. Splits on non-alphanumeric but
+    keeps digit runs intact, so exact EDI codes (824, 997, 008010) survive as
+    single tokens — the lexical signal dense embeddings blur (ADR-0007)."""
+    return _TOKEN_RE.findall(text.lower())
+
+
+def bm25_rank(query: str, corpus: list[str]) -> list[int]:
+    """Rank corpus indices best->worst for `query` with Okapi BM25 (rank_bm25).
+    Exact-code queries that dense search blurs are BM25's strength (ADR-0007).
+    Ties break by ascending index (stable). Empty corpus -> []."""
+    if not corpus:
+        return []
+    from rank_bm25 import BM25Okapi
+
+    bm25 = BM25Okapi([tokenize(doc) for doc in corpus])
+    scores = bm25.get_scores(tokenize(query))
+    return sorted(range(len(corpus)), key=lambda i: (-scores[i], i))
+
+
+def reciprocal_rank_fusion(rankings: list[list], k: int = RRF_K) -> list:
+    """Fuse ranked lists of hashable keys via Reciprocal Rank Fusion: for each
+    key, score = Σ 1/(k + rank), where rank is its 1-based position in each list
+    it appears in. Returns keys by descending fused score; ties break by best
+    (lowest) rank seen, then first appearance. One rank-based seam so the dense
+    and BM25 rankings combine without score normalization (ADR-0007). Empty
+    input -> []."""
+    scores: dict = {}
+    best_rank: dict = {}
+    first_seen: dict = {}
+    seq = 0
+    for ranking in rankings:
+        for rank, key in enumerate(ranking, start=1):
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+            if key not in best_rank or rank < best_rank[key]:
+                best_rank[key] = rank
+            if key not in first_seen:
+                first_seen[key] = seq
+                seq += 1
+    return sorted(scores, key=lambda key: (-scores[key], best_rank[key], first_seen[key]))
+
+
+def hit_at_k(retrieved_sources: list[str], expected, k: int) -> bool:
+    """True iff any expected source is among the first k retrieved sources
+    (best-first; duplicates counted as positions). `expected` is a str or a list
+    of str. The offline retrieval metric behind `--eval` (ADR-0007)."""
+    wanted = {expected} if isinstance(expected, str) else set(expected)
+    return any(src in wanted for src in retrieved_sources[:k])
+
+
 # --- retrieve + generate --------------------------------------------------
-def retrieve(question: str):
+def retrieve(question: str) -> list[tuple[str, dict]]:
+    """Hybrid retrieval (ADR-0007): fuse a dense ranking (Chroma local
+    embeddings) with a BM25 lexical ranking over the same chunks, via RRF, and
+    return the top-TOP_K (doc, meta) pairs. This is the single seam — both the
+    RAG path (`answer`) and the agent's `search_docs` tool call it, so both get
+    hybrid for free.
+
+    BM25 catches exact EDI codes (824, 997, ISA) that dense embeddings blur;
+    dense catches paraphrases BM25 misses. The BM25 index is rebuilt per query
+    from the full collection — fine for the seed corpus; revisit if it grows
+    (noted honestly rather than silently capped)."""
     import chromadb
 
     client = chromadb.PersistentClient(path=CHROMA_DIR)
@@ -85,10 +187,23 @@ def retrieve(question: str):
         col = client.get_collection(COLLECTION)
     except Exception:
         sys.exit("No index yet. Run:  uv run interchange.py --reindex")
-    res = col.query(query_texts=[question], n_results=TOP_K)
-    docs = res["documents"][0]
-    metas = res["metadatas"][0]
-    return list(zip(docs, metas))
+
+    everything = col.get(include=["documents", "metadatas"])
+    ids, docs, metas = everything["ids"], everything["documents"], everything["metadatas"]
+    if not ids:
+        return []
+    by_id = {i: (d, m) for i, d, m in zip(ids, docs, metas)}
+
+    # dense ranking over a candidate pool (wider than TOP_K so fusion has signal)
+    pool = min(len(ids), max(TOP_K * 5, 20))
+    dense = col.query(query_texts=[question], n_results=pool)
+    dense_ids = dense["ids"][0]
+
+    # bm25 ranking over the SAME chunks, mapped back to ids
+    bm25_ids = [ids[i] for i in bm25_rank(question, docs)]
+
+    fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
+    return [by_id[i] for i in fused[:TOP_K] if i in by_id]
 
 
 # Engines return a dict: text, in/out tokens, cost (API-equivalent when known,
@@ -256,12 +371,52 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
     return text
 
 
+# --- evaluation (offline, $0) ---------------------------------------------
+def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K) -> dict:
+    """Offline retrieval eval (ADR-0007): for each golden {question,
+    expected_source}, run the hybrid retrieve() and score hit@k. Prints a
+    per-question table + aggregate and returns {"n","hits","hit_at_k","k"}.
+
+    Runs on local embeddings + BM25 ($0). The point is honesty: a retrieval
+    change is *measured* against this set, not asserted. Grow the golden set as
+    the corpus grows."""
+    import json as _json
+
+    golden_path = pathlib.Path(golden_path)
+    if not golden_path.exists():
+        sys.exit(f"No golden set at {golden_path}. See eval/README.md.")
+    rows = [_json.loads(line) for line in golden_path.read_text().splitlines() if line.strip()]
+    if not rows:
+        sys.exit(f"Golden set {golden_path} is empty.")
+
+    hits = 0
+    print(f"Retrieval eval — hit@{k} over {len(rows)} golden question(s)\n")
+    print(f"  {'':<3} {'expected':<20} question")
+    print(f"  {'-' * 3} {'-' * 20} {'-' * 44}")
+    for row in rows:
+        question = row["question"]
+        expected = row.get("expected_source") or row.get("expected_sources")
+        sources = [m["source"] for _, m in retrieve(question)]
+        ok = hit_at_k(sources, expected, k)
+        hits += ok
+        exp_str = expected if isinstance(expected, str) else ",".join(expected)
+        print(f"  {'✅' if ok else '❌':<3} {exp_str:<20} {question[:44]}")
+    rate = hits / len(rows)
+    print(f"\n  hit@{k} = {hits}/{len(rows)} = {rate:.1%}")
+    return {"n": len(rows), "hits": hits, "hit_at_k": rate, "k": k}
+
+
 # --- cli ------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Interchange — RAG Q&A MVP")
     ap.add_argument("--reindex", action="store_true", help="rebuild the index from docs/")
     ap.add_argument("--ask", metavar="Q", help="ask one question and exit")
     ap.add_argument("--audit", action="store_true", help="show governance/cost summary and exit")
+    ap.add_argument("--eval", action="store_true",
+                    help="run the offline retrieval eval (hit@k over eval/golden.jsonl) and exit; "
+                         "measures the hybrid retriever, $0 (ADR-0007)")
+    ap.add_argument("--k", type=int, default=TOP_K, metavar="N",
+                    help=f"hit@k cutoff for --eval (default {TOP_K})")
     ap.add_argument("--engine", choices=sorted(ENGINES), default=os.environ.get("INTERCHANGE_ENGINE", "api"),
                     help="generation engine: 'api' (Anthropic SDK, metered) or "
                          "'claude-code' (headless Claude Code on a Pro/Max subscription)")
@@ -285,6 +440,10 @@ def main():
         from enterprise import audit_summary
 
         print(audit_summary())
+        return
+
+    if args.eval:
+        run_eval(k=args.k)
         return
 
     # load .env if present (optional convenience)

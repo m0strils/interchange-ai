@@ -1,0 +1,14 @@
+{"question": "What is the 997 Functional Acknowledgment used for?", "expected_source": "x12-overview.md"}
+{"question": "What is the 214 Transportation Carrier Shipment Status Message?", "expected_source": "x12-overview.md"}
+{"question": "What does the ISA/IEA interchange envelope do in X12?", "expected_source": "x12-overview.md"}
+{"question": "What is the GS/GE functional group envelope?", "expected_source": "x12-overview.md"}
+{"question": "What are the ST/SE segments that bound one X12 transaction set?", "expected_source": "x12-overview.md"}
+{"question": "Which X12 message confirms that a received functional group was syntactically received?", "expected_source": "x12-overview.md"}
+{"question": "What is the 161 Train Sheet transaction set?", "expected_source": "rail-edi-notes.md"}
+{"question": "What is the 404 Rail Carrier Shipment Information transaction set?", "expected_source": "rail-edi-notes.md"}
+{"question": "What is the 417 Rail Carrier Waybill Interchange used for?", "expected_source": "rail-edi-notes.md"}
+{"question": "What is the 990 Response to a Load Tender?", "expected_source": "rail-edi-notes.md"}
+{"question": "What role does the AAR play in rail industry EDI?", "expected_source": "rail-edi-notes.md"}
+{"question": "What AWS services run the event-driven rail EDI platform?", "expected_source": "rail-edi-notes.md"}
+{"question": "How does a railroad tell a trading partner that a received document failed validation?", "expected_source": "rail-edi-notes.md"}
+{"question": "What is the 824 Application Advice transaction set?", "expected_source": "x12-overview.md"}

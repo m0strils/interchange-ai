@@ -28,13 +28,15 @@ one and both stay in the log.
 | [0004](0004-telemetry-accuracy.md) | Telemetry accuracy & honesty for the subscription runtime | Accepted → **measured from `claude -p` json** |
 | [0005](0005-testing-strategy.md) | Testing strategy — TDD + Gherkin acceptance criteria | Accepted → **pytest + pytest-bdd** |
 | [0006](0006-quality-gate.md) | Quality gate — local git hook, not hosted CI | Accepted → **`.githooks/pre-push`** |
+| [0007](0007-retrieval-strategy.md) | Retrieval strategy — hybrid, structure-aware, measured | Accepted → **hybrid + tiny eval now** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
 
 ## Backlog (numbers assigned when written, in decision order)
-- Retrieval strategy: hybrid (BM25 + vector) + reranking + a *retrieve-vs-long-context* router
-- Evaluation as a release gate (RAGAS golden set)
+- Evaluation as a release gate (RAGAS golden set) — pulled forward by ADR-0007 (retrieval must be measured)
+- Reranking (local cross-encoder) — trigger: eval shows precision headroom
+- Retrieve-vs-long-context router + agentic multi-hop — trigger: corpus outgrows the context window
 - Tracing/observability backend (Phoenix vs. Langfuse)
 
 _Template: copy [`0000-template.md`](0000-template.md)._

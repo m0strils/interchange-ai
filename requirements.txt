@@ -1,5 +1,6 @@
 # Interchange — deps (minimal on purpose).
 # Phase 1 will add: langchain, langgraph, langchain-chroma, fastapi
 anthropic>=0.40       # metered API loop (agent.py) — exact telemetry
-chromadb>=0.5         # local vector index
+chromadb>=0.5         # local vector index (dense retrieval)
+rank-bm25>=0.2        # BM25 lexical retrieval for the hybrid seam (ADR-0007) — local, $0, offline
 mcp>=2,<3             # MCP SDK (2.x MCPServer API) for the subscription agent (agent_sub.py, ADR-0003/0004).
