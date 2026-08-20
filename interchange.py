@@ -205,7 +205,18 @@ def main():
     ap.add_argument("--explain", action="store_true",
                     help="narrate each pipeline stage to stderr (turns a run into a lesson); "
                          "composable with --ask and interactive mode")
+    ap.add_argument("--agent", action="store_true",
+                    help="agentic mode: the model drives retrieval + a segment-lookup tool, iterating "
+                         "until it has enough. Runs on your Claude subscription via headless Claude Code "
+                         "+ an MCP tool server — no API key (ADR-0003). The hand-rolled API loop lives in "
+                         "agent.py as Lesson 02 reference.")
     args = ap.parse_args()
+
+    def respond(q: str) -> str:
+        if args.agent:
+            from agent_sub import answer_agentic_sub
+            return answer_agentic_sub(q, explain=args.explain)
+        return answer(q, engine=args.engine, explain=args.explain)
 
     if args.audit:
         from enterprise import audit_summary
@@ -228,10 +239,11 @@ def main():
             return
 
     if args.ask:
-        print(answer(args.ask, engine=args.engine, explain=args.explain))
+        print(respond(args.ask))
         return
 
-    print("Interchange — ask a question ('exit' to quit).")
+    mode = "agentic" if args.agent else "RAG"
+    print(f"Interchange ({mode}) — ask a question ('exit' to quit).")
     while True:
         try:
             q = input("\n> ").strip()
@@ -240,7 +252,7 @@ def main():
         if q.lower() in {"exit", "quit"}:
             break
         if q:
-            print("\n" + answer(q, engine=args.engine, explain=args.explain))
+            print("\n" + respond(q))
 
 
 if __name__ == "__main__":

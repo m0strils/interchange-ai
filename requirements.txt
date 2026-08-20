@@ -1,4 +1,5 @@
-# Interchange — tonight's MVP deps (minimal on purpose).
+# Interchange — deps (minimal on purpose).
 # Phase 1 will add: langchain, langgraph, langchain-chroma, fastapi
-anthropic>=0.40
-chromadb>=0.5
+anthropic>=0.40       # metered API loop (agent.py) — exact telemetry
+chromadb>=0.5         # local vector index
+mcp>=1.0              # MCP tool server for the subscription agent (agent_sub.py, ADR-0003/0004)
