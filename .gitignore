@@ -4,6 +4,7 @@
 # runtime artifacts
 .chroma/
 audit.jsonl
+eval/grade-runs.jsonl
 __pycache__/
 .venv/
 

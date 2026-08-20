@@ -29,14 +29,15 @@ one and both stay in the log.
 | [0005](0005-testing-strategy.md) | Testing strategy — TDD + Gherkin acceptance criteria | Accepted → **pytest + pytest-bdd** |
 | [0006](0006-quality-gate.md) | Quality gate — local git hook, not hosted CI | Accepted → **`.githooks/pre-push`** |
 | [0007](0007-retrieval-strategy.md) | Retrieval strategy — hybrid, structure-aware, measured | Accepted → **hybrid + tiny eval now** |
+| [0008](0008-evaluation-gate.md) | Answer-quality evaluation — refusal-/answer-correctness, advisory | Accepted → **`--grade`, $0, advisory** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
 
 ## Backlog (numbers assigned when written, in decision order)
-- Evaluation as a release gate (RAGAS golden set) — pulled forward by ADR-0007 (retrieval must be measured)
+- Tracing/observability backend (Phoenix vs. Langfuse) — **next up, ADR-0009**; also trace the ADR-0008 eval runs
+- A repeatable answer-quality baseline / regression check — trigger: the LLM judge is made deterministic (ADR-0008 v1 is advisory, no baseline)
 - Reranking (local cross-encoder) — trigger: eval shows precision headroom
 - Retrieve-vs-long-context router + agentic multi-hop — trigger: corpus outgrows the context window
-- Tracing/observability backend (Phoenix vs. Langfuse)
 
 _Template: copy [`0000-template.md`](0000-template.md)._

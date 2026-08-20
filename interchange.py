@@ -417,6 +417,13 @@ def main():
                          "measures the hybrid retriever, $0 (ADR-0007)")
     ap.add_argument("--k", type=int, default=TOP_K, metavar="N",
                     help=f"hit@k cutoff for --eval (default {TOP_K})")
+    ap.add_argument("--grade", action="store_true",
+                    help="run the answer-quality eval (refusal- + answer-correctness, "
+                         "faithfulness monitor) over eval/golden.jsonl and exit; advisory, "
+                         "$0 on the subscription, telemetry estimated (ADR-0008)")
+    ap.add_argument("--fail-under", type=float, default=None, metavar="F",
+                    help="with --grade, exit nonzero if a headline signal falls below F "
+                         "(0..1); omit to keep --grade purely advisory")
     ap.add_argument("--engine", choices=sorted(ENGINES), default=os.environ.get("INTERCHANGE_ENGINE", "api"),
                     help="generation engine: 'api' (Anthropic SDK, metered) or "
                          "'claude-code' (headless Claude Code on a Pro/Max subscription)")
@@ -444,6 +451,15 @@ def main():
 
     if args.eval:
         run_eval(k=args.k)
+        return
+
+    if args.grade:
+        from eval_judge import run_grade
+
+        # generation forced onto the subscription ($0) per ADR-0008.
+        summary = run_grade(engine="claude-code", fail_under=args.fail_under)
+        if not summary["passed"]:
+            sys.exit(1)
         return
 
     # load .env if present (optional convenience)

@@ -29,6 +29,10 @@ don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard))
   upgrade retrieval from dense-only to **hybrid** (BM25 + dense, fused with RRF) +
   structure-aware chunking, then build a golden **hit@k** eval that *measures* the
   gain (dense 93% → hybrid 100%) instead of asserting it.
+- **[Lesson 05 — Evaluating the answer, and the metric that lied](lessons/05-evaluating-the-answer.md)** —
+  measure answer quality where it can actually fail (refusal- and answer-correctness),
+  why faithfulness is **circular** on a from-context RAG, and how verifying against real
+  output caught a refusal metric mis-scoring a good refusal — corrected before shipping.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
@@ -41,7 +45,7 @@ grows, in roadmap order.
 |---|---|---|---|
 | 1 | **Security** | input/output guardrails, prompt-injection defense (OWASP LLM01), instruction/data separation | ✅ [01](lessons/01-mvp.md) |
 | 2 | **Governance & Compliance** | per-request audit log (who asked what, which sources, cost), NIST AI RMF GOVERN | ✅ [01](lessons/01-mvp.md) |
-| 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ◐ [04](lessons/04-hybrid-retrieval.md) (golden set + hit@k; RAGAS/faithfulness gate pending) |
+| 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ◐ [04](lessons/04-hybrid-retrieval.md) (retrieval hit@k) + ADR-0008 (`--grade`: refusal-/answer-correctness + faithfulness monitor, advisory; CI gate pending) |
 | 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ⬜ coming (cost/latency partly in 01) |
 | 5 | **Reliability & Architecture** | retries, timeouts, circuit breakers, fallback routing, graceful "I don't know" | ⬜ coming (graceful refusal in 01) |
 | 6 | **Cost & Efficiency** | model routing (cheap model for easy turns), caching, token budgets | ⬜ coming (per-request cost + engine routing in 01) |

@@ -92,7 +92,7 @@ user ──input guardrail──> Claude (context = data, not instructions)
 |---|---|---|
 | Security | input/output guardrails, injection defense, instruction/data separation | ✅ |
 | Governance | per-request audit log w/ cost + grounding; secrets hygiene | ✅ |
-| Evaluation | golden dataset + faithfulness gate (RAGAS) | ⬜ |
+| Evaluation | retrieval hit@k eval (`--eval`); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
 | Observability | latency/cost in audit log; distributed tracing (Phoenix) | 🟡 |
 | Reliability | graceful refusal over hallucination; retries/fallback routing | 🟡 |
 | Cost | per-request estimate + running total; model routing | 🟡 |
