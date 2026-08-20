@@ -6,3 +6,6 @@
 audit.jsonl
 __pycache__/
 .venv/
+
+# pytest
+.pytest_cache/

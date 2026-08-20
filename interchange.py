@@ -91,7 +91,10 @@ def retrieve(question: str):
     return list(zip(docs, metas))
 
 
-def _generate_api(user_content: str) -> tuple[str, int, int]:
+# Engines return a dict: text, in/out tokens, cost (API-equivalent when known,
+# else None -> computed in audit()), the resolved model, and a telemetry flag
+# (measured|estimated).
+def _generate_api(user_content: str) -> dict:
     """Generation via the Anthropic SDK (metered API billing; exact token counts)."""
     import anthropic
 
@@ -104,14 +107,72 @@ def _generate_api(user_content: str) -> tuple[str, int, int]:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
-    return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens
+    return {
+        "text": resp.content[0].text,
+        "in": resp.usage.input_tokens,
+        "out": resp.usage.output_tokens,
+        "cost": None,               # computed from prices in audit()
+        "telemetry": "measured",
+        "model": MODEL,
+    }
 
 
-def _generate_claude_code(user_content: str) -> tuple[str, int, int]:
+def _dominant_model(model_usage: dict | None) -> str | None:
+    """Pick the model that did the real work from a `modelUsage` map — the key
+    with the max (costUSD, outputTokens). Returns None if the map is absent/empty.
+    Claude Code runs Opus regardless of the configured MODEL, so the audit must
+    record what actually ran (ADR-0004 / code-review finding #1)."""
+    if not model_usage:
+        return None
+    return max(
+        model_usage,
+        key=lambda m: (
+            (model_usage[m] or {}).get("costUSD", 0),
+            (model_usage[m] or {}).get("outputTokens", 0),
+        ),
+    )
+
+
+def parse_claude_usage(stdout: str, est_input_chars: int) -> dict:
+    """Parse `claude -p --output-format json` stdout into an engine-shaped dict
+    {text, in, out, cost, model, telemetry} — the single home for this logic
+    (ADR-0004 / code-review finding #5), shared by the RAG engine and the sub agent.
+
+    If `usage` is present, telemetry is MEASURED: true input = input_tokens +
+    cache_creation_input_tokens + cache_read_input_tokens (input_tokens alone
+    undercounts badly — most of it lives in cache_creation, and a cache-only turn
+    reads 0), output = output_tokens, cost = top-level total_cost_usd. The model
+    is the dominant key of `modelUsage` (Claude Code runs Opus, not MODEL).
+
+    If `usage` is absent or the JSON won't parse, fall back to a LABELED
+    ~4-chars/token estimate over the full prompt sent and the generated text.
+    """
+    import json as _json
+
+    try:
+        out = _json.loads(stdout)
+        text = (out.get("result") or "").strip()
+        usage = out.get("usage") or {}
+    except _json.JSONDecodeError:
+        out, text, usage = {}, stdout.strip(), {}
+
+    model = _dominant_model(out.get("modelUsage"))
+    if usage:
+        # True input includes cached tokens — input_tokens alone undercounts badly.
+        in_tok = (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+                  + usage.get("cache_read_input_tokens", 0))
+        return {"text": text, "in": in_tok, "out": usage.get("output_tokens", 0),
+                "cost": out.get("total_cost_usd"), "model": model, "telemetry": "measured"}
+    return {"text": text, "in": est_input_chars // 4, "out": len(text) // 4,
+            "cost": None, "model": model, "telemetry": "estimated"}
+
+
+def _generate_claude_code(user_content: str) -> dict:
     """
     Generation via Claude Code headless (`claude -p`) — runs on a Claude
-    subscription (Pro/Max) instead of metered API billing. Token counts are
-    estimated (~4 chars/token) since the CLI doesn't return usage.
+    subscription (Pro/Max) instead of metered API billing. Reads MEASURED usage
+    and cost from `--output-format json` (ADR-0004); falls back to a labeled
+    ~4-chars/token estimate only if the CLI omits usage.
     """
     import shutil
     import subprocess
@@ -119,13 +180,13 @@ def _generate_claude_code(user_content: str) -> tuple[str, int, int]:
     if not shutil.which("claude"):
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
     proc = subprocess.run(
-        ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT],
+        ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
+         "--output-format", "json"],
         capture_output=True, text=True, timeout=180,
     )
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")
-    text = proc.stdout.strip()
-    return text, len(user_content) // 4, len(text) // 4
+    return parse_claude_usage(proc.stdout, est_input_chars=len(user_content))
 
 
 ENGINES = {"api": _generate_api, "claude-code": _generate_claude_code}
@@ -175,7 +236,8 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
     if explain:
         _explain(f"stage 4/5 generation — engine={engine} model={MODEL}")
     t0 = _time.monotonic()
-    text, in_tokens, out_tokens = ENGINES[engine](user_content)
+    gen = ENGINES[engine](user_content)
+    text, in_tokens, out_tokens = gen["text"], gen["in"], gen["out"]
     latency_ms = int((_time.monotonic() - t0) * 1000)
 
     # -- enterprise: output guardrail (grounding) + audit/cost record --
@@ -187,9 +249,10 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
         _explain(f"stage 5/5 output guardrail — {verdict}")
         _explain(f"  audit: model={MODEL} engine={engine} sources={sources} "
                  f"in={in_tokens} out={out_tokens} tok, {latency_ms}ms -> audit.jsonl")
-    audit(question=question, model=MODEL, sources=sources,
+    audit(question=question, model=gen.get("model") or MODEL, sources=sources,
           in_tokens=in_tokens, out_tokens=out_tokens,
-          latency_ms=latency_ms, grounded=grounded, engine=engine)
+          latency_ms=latency_ms, grounded=grounded, engine=engine,
+          telemetry=gen["telemetry"], cost_usd=gen["cost"])
     return text
 
 

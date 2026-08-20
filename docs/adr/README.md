@@ -25,11 +25,15 @@ one and both stay in the log.
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0002](0002-orchestration-framework.md) | Orchestration for the agentic runtime | Accepted (superseded in part by 0003) |
 | [0003](0003-agent-generation-auth.md) | Generation auth for the agent runtime (API vs Max) | Accepted → **subscription: `claude -p` + MCP** (amended) |
+| [0004](0004-telemetry-accuracy.md) | Telemetry accuracy & honesty for the subscription runtime | Accepted → **measured from `claude -p` json** |
+| [0005](0005-testing-strategy.md) | Testing strategy — TDD + Gherkin acceptance criteria | **Proposed** |
 
-## Backlog (decisions coming as we build Phase 1)
-- **0004** — Expose the domain lookup as an **MCP tool server** (pulled forward by 0003 — the Agent SDK takes tools via MCP)
-- **0004** — Retrieval strategy: hybrid (BM25 + vector) + reranking + a *retrieve-vs-long-context* router
-- **0005** — Evaluation as a release gate (RAGAS golden set)
-- **0006** — Tracing/observability backend (Phoenix vs. Langfuse)
+_(MCP tool server — was pencilled as a separate ADR — was implemented under
+ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
+
+## Backlog (numbers assigned when written, in decision order)
+- Retrieval strategy: hybrid (BM25 + vector) + reranking + a *retrieve-vs-long-context* router
+- Evaluation as a release gate (RAGAS golden set)
+- Tracing/observability backend (Phoenix vs. Langfuse)
 
 _Template: copy [`0000-template.md`](0000-template.md)._

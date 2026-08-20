@@ -28,7 +28,7 @@ import sys
 import time
 
 from enterprise import GuardrailViolation, audit, guard_input, guard_output
-from interchange import DOCS_DIR, MODEL, _explain
+from interchange import DOCS_DIR, MODEL, _explain, parse_claude_usage
 
 _HERE = pathlib.Path(__file__).parent
 _MCP_SERVER = _HERE / "mcp_server.py"
@@ -97,18 +97,14 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")
 
-    # Parse the structured output; tolerate a plain-text fallback across versions.
-    try:
-        out = json.loads(proc.stdout)
-        text = (out.get("result") or "").strip()
-        usage = out.get("usage") or {}
-    except json.JSONDecodeError:
-        text, usage = proc.stdout.strip(), {}
-
-    # Subscription billing isn't per-call: record ESTIMATED tokens; audit() zeroes
-    # cost for non-api engines. Honest by design (ADR-0003).
-    in_tokens = usage.get("input_tokens") or (len(question) // 4)
-    out_tokens = usage.get("output_tokens") or (len(text) // 4)
+    # Parse the structured output via the shared helper (ADR-0004): MEASURED usage +
+    # shadow cost when `claude -p` reports them, else a LABELED estimate over the full
+    # prompt sent (system + question). model = what actually ran (Opus), not MODEL.
+    info = parse_claude_usage(proc.stdout,
+                              est_input_chars=len(SYSTEM_PROMPT) + len(question))
+    text = info["text"]
+    in_tokens, out_tokens = info["in"], info["out"]
+    cost, telemetry, model = info["cost"], info["telemetry"], info["model"]
 
     # Grounding check: does the answer cite a real doc? We can't see which sources
     # the sub-session retrieved, so pass the whole doc set as the candidate list —
@@ -117,9 +113,11 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
                          glob.glob(str(DOCS_DIR / "*.md")) + glob.glob(str(DOCS_DIR / "*.txt")))
     text, grounded = guard_output(text, doc_sources)
     if explain:
+        shadow = f"${cost:.4f}" if cost is not None else "n/a"
         _explain(f"stage 3 output guardrail — {'grounded ✅' if grounded else '⚠️ UNGROUNDED'}")
-        _explain(f"  audit: ~{in_tokens} in / ~{out_tokens} out tok (estimated), "
-                 f"{latency_ms}ms, $0 marginal (subscription) -> audit.jsonl")
-    audit(question=question, model=MODEL, sources=[], in_tokens=in_tokens,
-          out_tokens=out_tokens, latency_ms=latency_ms, grounded=grounded, engine="claude-code")
+        _explain(f"  audit ({telemetry}): {in_tokens} in / {out_tokens} out tok, "
+                 f"{latency_ms}ms, shadow≈{shadow}, $0 marginal -> audit.jsonl")
+    audit(question=question, model=(model or MODEL), sources=[], in_tokens=in_tokens,
+          out_tokens=out_tokens, latency_ms=latency_ms, grounded=grounded,
+          engine="claude-code", telemetry=telemetry, cost_usd=cost)
     return text

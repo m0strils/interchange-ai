@@ -103,21 +103,30 @@ def audit(
     grounded: bool,
     blocked: str | None = None,
     engine: str = "api",
+    telemetry: str = "measured",
+    cost_usd: float | None = None,
 ) -> dict:
-    """Append a governance record for this request; return it."""
-    # subscription-backed engines (claude-code) have no marginal API cost;
-    # tokens are still recorded (estimated) for capacity awareness.
-    cost = estimate_cost(model, in_tokens, out_tokens) if engine == "api" else 0.0
+    """Append a governance record for this request; return it (ADR-0004).
+
+    telemetry: "measured" (real token/cost data) or "estimated" (a labeled guess).
+    cost_usd:  the API-equivalent cost when known (e.g. `claude -p` total_cost_usd);
+               if None it's computed from the token counts. On subscription engines
+               this is the *shadow* cost — real resource use, but $0 marginal to you.
+    """
+    shadow = cost_usd if cost_usd is not None else estimate_cost(model, in_tokens, out_tokens)
+    marginal = shadow if engine == "api" else 0.0
     rec = {
         "id": str(uuid.uuid4())[:8],
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "question": question[:300],
         "model": model,
         "engine": engine,
+        "telemetry": telemetry,
         "sources": sources,
         "in_tokens": in_tokens,
         "out_tokens": out_tokens,
-        "cost_usd": round(cost, 6),
+        "cost_usd": round(shadow, 6),        # API-equivalent (shadow) cost
+        "marginal_usd": round(marginal, 6),  # what you actually paid ($0 on a subscription)
         "latency_ms": latency_ms,
         "grounded": grounded,
         "blocked": blocked,
@@ -132,12 +141,15 @@ def audit_summary() -> str:
     if not AUDIT_PATH.exists():
         return "no audit records yet"
     recs = [json.loads(line) for line in AUDIT_PATH.read_text().splitlines() if line.strip()]
-    total = sum(r.get("cost_usd", 0) for r in recs)
+    shadow = sum(r.get("cost_usd", 0) for r in recs)
+    billed = sum(r.get("marginal_usd", r.get("cost_usd", 0)) for r in recs)
+    estimated = sum(1 for r in recs if r.get("telemetry") == "estimated")
     blocked = sum(1 for r in recs if r.get("blocked"))
     ungrounded = sum(1 for r in recs if r.get("grounded") is False)
     lat = [r["latency_ms"] for r in recs if r.get("latency_ms")]
     p50 = sorted(lat)[len(lat) // 2] if lat else 0
     return (
         f"requests={len(recs)}  blocked={blocked}  ungrounded={ungrounded}  "
-        f"total_cost=${total:.4f}  p50_latency={p50}ms"
+        f"estimated_rows={estimated}  shadow_cost=${shadow:.4f}  billed=${billed:.4f}  "
+        f"p50_latency={p50}ms"
     )

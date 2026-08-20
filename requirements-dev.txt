@@ -1,0 +1,3 @@
+# Dev/test dependencies — the pytest + pytest-bdd acceptance/unit test stack (ADR-0005).
+pytest>=8
+pytest-bdd>=7
