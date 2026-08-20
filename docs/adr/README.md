@@ -26,7 +26,8 @@ one and both stay in the log.
 | [0002](0002-orchestration-framework.md) | Orchestration for the agentic runtime | Accepted (superseded in part by 0003) |
 | [0003](0003-agent-generation-auth.md) | Generation auth for the agent runtime (API vs Max) | Accepted → **subscription: `claude -p` + MCP** (amended) |
 | [0004](0004-telemetry-accuracy.md) | Telemetry accuracy & honesty for the subscription runtime | Accepted → **measured from `claude -p` json** |
-| [0005](0005-testing-strategy.md) | Testing strategy — TDD + Gherkin acceptance criteria | **Proposed** |
+| [0005](0005-testing-strategy.md) | Testing strategy — TDD + Gherkin acceptance criteria | Accepted → **pytest + pytest-bdd** |
+| [0006](0006-quality-gate.md) | Quality gate — local git hook, not hosted CI | Accepted → **`.githooks/pre-push`** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_

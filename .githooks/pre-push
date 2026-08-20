@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Quality gate (ADR-0006): run the offline test suite before every push.
+# We use a LOCAL git hook instead of hosted CI — no GitHub Actions minutes, $0.
+# The tests are hermetic (no network, no model, temp audit path), so this is fast
+# and deterministic. Install once per clone:  git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+PY=".venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
+
+echo "pre-push: running test gate ($PY -m pytest -q)…"
+if ! "$PY" -m pytest -q; then
+    echo "pre-push: tests failed — push aborted. Fix, or bypass once with 'git push --no-verify'." >&2
+    exit 1
+fi

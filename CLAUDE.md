@@ -39,6 +39,11 @@ python -m pytest -q                                 # the test gate (offline, fr
 / `subprocess.run` / `retrieve`) and redirect `enterprise.AUDIT_PATH` to a temp file.
 Add or adjust a scenario for new behavior *before* implementing it.
 
+**Gate (ADR-0006):** a `pre-push` hook runs the suite before every push — no hosted
+CI (out of GitHub Actions minutes / $0). Install once per clone:
+`git config core.hooksPath .githooks`. A failing suite blocks the push
+(`git push --no-verify` bypasses in a pinch).
+
 ## Honest-claim rule
 Personal portfolio/learning project. Scorecards tell the truth (built / partial /
 roadmap). No demo dressed up as shipped; no proprietary partner specs; `docs/` is
