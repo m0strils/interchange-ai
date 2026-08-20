@@ -11,13 +11,24 @@ which OWASP LLM Top 10 / NIST AI RMF clause it maps to.** Nothing is claimed as
 done that isn't — lessons teach the controls that exist and name the ones that
 don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard)).
 
-## Start here
+## The lessons so far
 
 - **[Lesson 01 — The MVP: a grounded, audited RAG loop](lessons/01-mvp.md)** —
   the `retrieve → ground → audit` core: input guardrail + instruction/data
   separation, the grounding/citation check (why an honest "I don't know" beats a
   confident hallucination), and the per-request audit + cost log. Run it with
   `--explain` and watch each stage narrate itself.
+- **[Lesson 02 — From one-shot RAG to an agentic loop](lessons/02-agentic-loop.md)** —
+  the model *drives* retrieval and a segment-lookup tool, iterating until it has
+  enough context — a hand-rolled loop on the metered API, with exact telemetry.
+- **[Lesson 03 — Running the agent on a subscription (API vs. Max, and MCP)](lessons/03-agent-on-a-subscription.md)** —
+  move the live agent onto your Claude subscription via headless `claude -p` + an
+  MCP tool server; least-privilege tools, $0 marginal cost, estimates labeled as
+  estimates.
+- **[Lesson 04 — Hybrid retrieval, and how to *prove* it helped](lessons/04-hybrid-retrieval.md)** —
+  upgrade retrieval from dense-only to **hybrid** (BM25 + dense, fused with RRF) +
+  structure-aware chunking, then build a golden **hit@k** eval that *measures* the
+  gain (dense 93% → hybrid 100%) instead of asserting it.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
@@ -30,14 +41,15 @@ grows, in roadmap order.
 |---|---|---|---|
 | 1 | **Security** | input/output guardrails, prompt-injection defense (OWASP LLM01), instruction/data separation | ✅ [01](lessons/01-mvp.md) |
 | 2 | **Governance & Compliance** | per-request audit log (who asked what, which sources, cost), NIST AI RMF GOVERN | ✅ [01](lessons/01-mvp.md) |
-| 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ⬜ coming |
+| 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ◐ [04](lessons/04-hybrid-retrieval.md) (golden set + hit@k; RAGAS/faithfulness gate pending) |
 | 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ⬜ coming (cost/latency partly in 01) |
 | 5 | **Reliability & Architecture** | retries, timeouts, circuit breakers, fallback routing, graceful "I don't know" | ⬜ coming (graceful refusal in 01) |
 | 6 | **Cost & Efficiency** | model routing (cheap model for easy turns), caching, token budgets | ⬜ coming (per-request cost + engine routing in 01) |
 | 7 | **Deployment & Ops** | IaC, CI/CD, secrets management, AWS Bedrock keeping data in-VPC | ⬜ coming |
-| 8 | **Context & Memory Engineering** | agentic retrieval (plan → retrieve → reason → "enough context?"), retrieval-vs-long-context routing, agentic memory — the 2026 headline skill | ⬜ coming |
+| 8 | **Context & Memory Engineering** | agentic retrieval (plan → retrieve → reason → "enough context?"), retrieval-vs-long-context routing, agentic memory — the 2026 headline skill | ◐ [02](lessons/02-agentic-loop.md) [03](lessons/03-agent-on-a-subscription.md) [04](lessons/04-hybrid-retrieval.md) (agentic retrieval + hybrid seam; router/multi-hop deferred) |
 
-**Legend:** ✅ taught & built · ⬜ coming as the project grows. This mirrors the
+**Legend:** ✅ taught & built · ◐ partly built (boundary noted) · ⬜ coming as the
+project grows. This mirrors the
 README's build/partial/roadmap scorecard — the honesty is deliberate. Knowing
 *where a control stops* is part of knowing the control.
 
