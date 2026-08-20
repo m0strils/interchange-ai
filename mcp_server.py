@@ -16,12 +16,12 @@ Requires: pip install mcp
 """
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer       # mcp 2.x high-level server (FastMCP in 1.x)
 
 from agent import _lookup_segment      # reuse the exact tool logic
 from interchange import retrieve
 
-mcp = FastMCP("interchange")
+mcp = MCPServer("interchange")
 
 
 @mcp.tool()

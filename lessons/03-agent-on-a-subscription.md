@@ -36,7 +36,7 @@ your question ──> claude -p (subscription)
               answer (grounded, cited) ──> output guardrail ──> audit
 ```
 
-- **`mcp_server.py`** — a tiny stdio MCP server (FastMCP) exposing `search_docs`
+- **`mcp_server.py`** — a tiny stdio MCP server (mcp 2.x `MCPServer`) exposing `search_docs`
   and `lookup_segment`. The tool logic is *reused verbatim* from Lesson 02, so the
   tools behave identically on either runtime.
 - **`agent_sub.py`** — runs `claude -p` with that server, restricted to **only**
