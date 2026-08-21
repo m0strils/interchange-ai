@@ -1,0 +1,11 @@
+# Optional tracing deps (ADR-0009) — install ONLY to view traces locally:
+#   pip install -r requirements-trace.txt
+#
+# Deliberately NOT in requirements.txt or requirements-dev.txt: these are heavy and
+# would bloat every clone's pre-push env (and risk conflicts with chromadb). Tracing
+# is off by default and no-ops when these are absent, so the offline test gate never
+# needs them. Enable with:  INTERCHANGE_TRACING=1  (and a local Phoenix running).
+arize-phoenix                       # local, $0 trace UI (OTel + OpenInference)
+opentelemetry-sdk                   # tracer + span processors
+opentelemetry-exporter-otlp-proto-http  # OTLP/HTTP exporter to the local Phoenix
+openinference-semantic-conventions  # LLM/RAG span-kind attribute vocabulary

@@ -33,6 +33,11 @@ don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard))
   measure answer quality where it can actually fail (refusal- and answer-correctness),
   why faithfulness is **circular** on a from-context RAG, and how verifying against real
   output caught a refusal metric mis-scoring a good refusal — corrected before shipping.
+- **[Lesson 06 — Observability: two layers, and the bug tracing caught](lessons/06-observability-tracing.md)** —
+  add opt-in OpenTelemetry tracing (manual spans for RAG, Claude Code's native OTel for
+  the agent) to a local Phoenix atop the always-on audit log; why auto-instrumentation
+  finds nothing to patch here, and how the first traced agent run surfaced a latent
+  MCP-server bug.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
@@ -46,7 +51,7 @@ grows, in roadmap order.
 | 1 | **Security** | input/output guardrails, prompt-injection defense (OWASP LLM01), instruction/data separation | ✅ [01](lessons/01-mvp.md) |
 | 2 | **Governance & Compliance** | per-request audit log (who asked what, which sources, cost), NIST AI RMF GOVERN | ✅ [01](lessons/01-mvp.md) |
 | 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ◐ [04](lessons/04-hybrid-retrieval.md) (retrieval hit@k) + ADR-0008 (`--grade`: refusal-/answer-correctness + faithfulness monitor, advisory; CI gate pending) |
-| 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ⬜ coming (cost/latency partly in 01) |
+| 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ◐ ADR-0009 (opt-in OpenTelemetry tracing of RAG + agent to a local Phoenix; audit cost/latency in 01) |
 | 5 | **Reliability & Architecture** | retries, timeouts, circuit breakers, fallback routing, graceful "I don't know" | ⬜ coming (graceful refusal in 01) |
 | 6 | **Cost & Efficiency** | model routing (cheap model for easy turns), caching, token budgets | ⬜ coming (per-request cost + engine routing in 01) |
 | 7 | **Deployment & Ops** | IaC, CI/CD, secrets management, AWS Bedrock keeping data in-VPC | ⬜ coming |

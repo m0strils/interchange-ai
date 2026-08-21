@@ -93,7 +93,7 @@ user ──input guardrail──> Claude (context = data, not instructions)
 | Security | input/output guardrails, injection defense, instruction/data separation | ✅ |
 | Governance | per-request audit log w/ cost + grounding; secrets hygiene | ✅ |
 | Evaluation | retrieval hit@k eval (`--eval`); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
-| Observability | latency/cost in audit log; distributed tracing (Phoenix) | 🟡 |
+| Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009) | 🟡 |
 | Reliability | graceful refusal over hallucination; retries/fallback routing | 🟡 |
 | Cost | per-request estimate + running total; model routing | 🟡 |
 | Deployment | IaC, CI/CD, AWS Bedrock in-VPC | ⬜ |

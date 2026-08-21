@@ -30,12 +30,13 @@ one and both stay in the log.
 | [0006](0006-quality-gate.md) | Quality gate — local git hook, not hosted CI | Accepted → **`.githooks/pre-push`** |
 | [0007](0007-retrieval-strategy.md) | Retrieval strategy — hybrid, structure-aware, measured | Accepted → **hybrid + tiny eval now** |
 | [0008](0008-evaluation-gate.md) | Answer-quality evaluation — refusal-/answer-correctness, advisory | Accepted → **`--grade`, $0, advisory** |
+| [0009](0009-observability.md) | Observability — OpenTelemetry tracing viewed in a local Phoenix | Accepted → **OTel + Phoenix, off by default** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
 
 ## Backlog (numbers assigned when written, in decision order)
-- Tracing/observability backend (Phoenix vs. Langfuse) — **next up, ADR-0009**; also trace the ADR-0008 eval runs
+- Trace the ADR-0008 `--grade` eval runs — trigger: the ADR-0009 trace seam proven on live requests
 - A repeatable answer-quality baseline / regression check — trigger: the LLM judge is made deterministic (ADR-0008 v1 is advisory, no baseline)
 - Reranking (local cross-encoder) — trigger: eval shows precision headroom
 - Retrieve-vs-long-context router + agentic multi-hop — trigger: corpus outgrows the context window

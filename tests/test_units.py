@@ -137,3 +137,13 @@ def test_parse_claude_usage_estimated_fallback_when_no_usage():
 # --- agent segment lookup --------------------------------------------------
 def test_lookup_segment_st_definition():
     assert "Transaction Set Header" in _lookup_segment("ST")
+
+
+# --- MCP server import (regression: the --agent path depends on this) -------
+def test_mcp_server_imports_cleanly():
+    """The subscription agent (ADR-0003) spawns mcp_server.py; if it can't import,
+    claude -p silently falls back to other connectors and answers ungrounded. This
+    guards the API drift that broke it (mcp exposes FastMCP, not MCPServer)."""
+    import mcp_server
+
+    assert mcp_server.mcp.name == "interchange"

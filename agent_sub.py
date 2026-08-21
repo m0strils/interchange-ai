@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 
+import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 from enterprise import GuardrailViolation, audit, guard_input, guard_output
 from interchange import DOCS_DIR, MODEL, _explain, parse_claude_usage
 
@@ -91,8 +92,14 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
         _explain(f"stage 2 launching headless Claude Code on your subscription "
                  f"with MCP tools [{_ALLOWED_TOOLS}] (least-privilege allow-list)")
 
+    # When tracing is on, hand Claude Code its own OTel env so it emits the native
+    # interaction->llm_request->tool span tree and propagates traceparent into the MCP
+    # server (ADR-0009). Empty merge (== inherit) when tracing is off.
+    env = {**os.environ, **obs.claude_code_trace_env()}
     t0 = time.monotonic()
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240, cwd=str(_HERE))
+    with obs.span("agent", **{"openinference.span.kind": "AGENT", "input.value": question}):
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240,
+                              cwd=str(_HERE), env=env)
     latency_ms = int((time.monotonic() - t0) * 1000)
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")

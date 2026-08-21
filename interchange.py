@@ -23,6 +23,8 @@ import pathlib
 import re
 import sys
 
+import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
+
 # --- config ---------------------------------------------------------------
 DOCS_DIR = pathlib.Path(__file__).parent / "docs"
 CHROMA_DIR = str(pathlib.Path(__file__).parent / ".chroma")
@@ -188,22 +190,26 @@ def retrieve(question: str) -> list[tuple[str, dict]]:
     except Exception:
         sys.exit("No index yet. Run:  uv run interchange.py --reindex")
 
-    everything = col.get(include=["documents", "metadatas"])
-    ids, docs, metas = everything["ids"], everything["documents"], everything["metadatas"]
-    if not ids:
-        return []
-    by_id = {i: (d, m) for i, d, m in zip(ids, docs, metas)}
+    with obs.span("retrieve", **{"openinference.span.kind": "RETRIEVER",
+                                 "input.value": question}):
+        everything = col.get(include=["documents", "metadatas"])
+        ids, docs, metas = everything["ids"], everything["documents"], everything["metadatas"]
+        if not ids:
+            return []
+        by_id = {i: (d, m) for i, d, m in zip(ids, docs, metas)}
 
-    # dense ranking over a candidate pool (wider than TOP_K so fusion has signal)
-    pool = min(len(ids), max(TOP_K * 5, 20))
-    dense = col.query(query_texts=[question], n_results=pool)
-    dense_ids = dense["ids"][0]
+        # dense ranking over a candidate pool (wider than TOP_K so fusion has signal)
+        pool = min(len(ids), max(TOP_K * 5, 20))
+        with obs.span("retrieve.dense", **{"pool": pool}):
+            dense_ids = col.query(query_texts=[question], n_results=pool)["ids"][0]
 
-    # bm25 ranking over the SAME chunks, mapped back to ids
-    bm25_ids = [ids[i] for i in bm25_rank(question, docs)]
+        # bm25 ranking over the SAME chunks, mapped back to ids
+        with obs.span("retrieve.bm25"):
+            bm25_ids = [ids[i] for i in bm25_rank(question, docs)]
 
-    fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
-    return [by_id[i] for i in fused[:TOP_K] if i in by_id]
+        with obs.span("retrieve.rrf"):
+            fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
+        return [by_id[i] for i in fused[:TOP_K] if i in by_id]
 
 
 # Engines return a dict: text, in/out tokens, cost (API-equivalent when known,
@@ -325,7 +331,8 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
     if explain:
         _explain("stage 1/5 input guardrail — checking for injection / limits (OWASP LLM01)")
     try:
-        question = guard_input(question)
+        with obs.span("guard_input", **{"openinference.span.kind": "GUARDRAIL"}):
+            question = guard_input(question)
     except GuardrailViolation as e:
         if explain:
             _explain(f"  blocked: {e} — request never reaches retrieval or the model")
@@ -351,12 +358,15 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
     if explain:
         _explain(f"stage 4/5 generation — engine={engine} model={MODEL}")
     t0 = _time.monotonic()
-    gen = ENGINES[engine](user_content)
+    with obs.span("generate", **{"openinference.span.kind": "LLM",
+                                 "llm.model_name": MODEL, "engine": engine}):
+        gen = ENGINES[engine](user_content)
     text, in_tokens, out_tokens = gen["text"], gen["in"], gen["out"]
     latency_ms = int((_time.monotonic() - t0) * 1000)
 
     # -- enterprise: output guardrail (grounding) + audit/cost record --
-    text, grounded = guard_output(text, sources)
+    with obs.span("guard_output", **{"openinference.span.kind": "GUARDRAIL"}):
+        text, grounded = guard_output(text, sources)
     if explain:
         verdict = ("grounded ✅ — answer cites a retrieved source (or is a legitimate "
                    "'context doesn't say' refusal)") if grounded else (
