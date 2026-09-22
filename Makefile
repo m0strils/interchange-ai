@@ -4,14 +4,18 @@
 
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 PROFILE ?= rail
+MODE ?= hybrid
+K ?= 4
 
-.PHONY: help test a2a-demo a2a-keygen a2a-accept
+.PHONY: help test a2a-demo a2a-keygen a2a-accept reindex eval
 
 help:
 	@echo "make test                    - the offline test gate (pytest + pytest-bdd)"
 	@echo "make a2a-demo [PROFILE=rail] - two-agent A2A demo, offline, \$$0 (rail|hotel)"
 	@echo "make a2a-keygen              - print a fresh ES256 signing pair for the deploy"
 	@echo "make a2a-accept              - run the A2A acceptance gate"
+	@echo "make reindex PROFILE=vault   - build the index for PROFILE (export INTERCHANGE_VAULT_DIR first for vault)"
+	@echo "make eval PROFILE=vault      - retrieval eval for PROFILE (MODE=hybrid|dense|bm25|hybrid+links|all K=4)"
 
 test:
 	$(PY) -m pytest -q
@@ -30,3 +34,8 @@ a2a-keygen:
 
 a2a-accept:
 	@bash scripts/a2a-accept.sh
+
+reindex:  ## Build the index for PROFILE (export INTERCHANGE_VAULT_DIR first for PROFILE=vault)
+	@eval "$$($(PY) -m a2a_agent.profiles $(PROFILE) --export)" && $(PY) interchange.py --reindex
+eval:     ## Retrieval eval for PROFILE: MODE=hybrid|dense|bm25|hybrid+links|all K=4
+	@eval "$$($(PY) -m a2a_agent.profiles $(PROFILE) --export)" && $(PY) interchange.py --eval --corpus "$$INTERCHANGE_COLLECTION" --golden "$$INTERCHANGE_GOLDEN" --mode $(MODE) --k $(K)

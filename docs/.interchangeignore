@@ -1,0 +1,5 @@
+# Patterns excluded from the retrieval index (gitignore-lite: one per line,
+# "#" comments, trailing "/" = directory; no negation, no "**").
+# adr/ is this repo's own decision record — project meta, not EDI/rail domain
+# knowledge. Indexing it would pollute the corpus and the golden eval set.
+adr/

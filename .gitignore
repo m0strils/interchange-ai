@@ -11,6 +11,7 @@
 .chroma/
 audit.jsonl
 eval/grade-runs.jsonl
+eval/eval-runs.jsonl
 __pycache__/
 .venv/
 

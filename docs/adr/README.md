@@ -34,6 +34,7 @@ one and both stay in the log.
 | [0010](0010-document-ingestion-formats.md) | Document ingestion formats — PDF via pypdf (BSD) over pymupdf4llm (AGPL) | Accepted → **pypdf, flat text, no OCR** |
 | [0011](0011-strands-comparison.md) | Agentic orchestration trade-offs — Interchange's explicit loop vs. Strands' model-driven | Proposed → **reference architecture comparison** |
 | [0013](0013-a2a-agent-interop.md) | Agent-to-agent interop over A2A with signed Agent Cards | Accepted → **A2A 1.0 + 0.3 compat, signed card, pinned kid** |
+| [0014](0014-vault-corpus-and-measured-ablations.md) | Vault corpus: recursive ingestion, read-only profile, measured ablations | Accepted → **reranker trigger fired (hit@1 11→15/18); link expansion regressed, deferred** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
@@ -41,7 +42,9 @@ ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
 ## Backlog (numbers assigned when written, in decision order)
 - Trace the ADR-0008 `--grade` eval runs — trigger: the ADR-0009 trace seam proven on live requests
 - A repeatable answer-quality baseline / regression check — trigger: the LLM judge is made deterministic (ADR-0008 v1 is advisory, no baseline)
-- Reranking (local cross-encoder) — trigger: eval shows precision headroom
+- Reranking (local cross-encoder) — **measured (ADR-0014):** the trigger fired and paid off (hit@1 11→15/18, $0). Open item — reranker as default path: latency + rail check
+- Link-aware expansion — trigger: linked rows missing under hybrid+rerank on a future golden set (ADR-0014: naive 1-hop regressed hit@1 by 5 rows, deferred)
+- TypeSafe Jev reranker — **measured 2026-09-22 (ADR-0014):** parity with the local cross-encoder on the vault golden set; stays opt-in, metered (~3¢/run)
 - Retrieve-vs-long-context router + agentic multi-hop — trigger: corpus outgrows the context window
 
 _Template: copy [`0000-template.md`](0000-template.md)._
