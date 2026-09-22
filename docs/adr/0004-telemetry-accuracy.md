@@ -77,3 +77,12 @@ to `--output-format json`); the API paths are already measured.
 - Small changes: `audit()` gains a `telemetry` flag; the two subscription call sites
   and `audit_summary()` updated; `--explain` shows the flag.
 - No new metered API spend (honors ADR-0003).
+
+## Update — 2026-09-22
+Both `claude -p` call sites (`interchange._generate_claude_code`, `agent_sub`) ran in
+the **caller's** working directory. Launched from inside a repo with a `.claude/` Stop
+hook, the child session ran the hook (the pytest gate) and returned **hook commentary**
+in place of the answer — measured telemetry over the wrong text, flagged UNGROUNDED;
+from `/tmp` the same question answered correctly. Fix: both now run in a repo-free
+`interchange.headless_cwd()` and pass `--setting-sources user`, so no project settings
+or hooks load. Telemetry stays measured; the number now covers the real answer.
