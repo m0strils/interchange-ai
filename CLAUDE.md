@@ -10,7 +10,7 @@ python -m venv .venv && source .venv/bin/activate   # or: uv venv && source .ven
 pip install -r requirements.txt                     # runtime deps
 pip install -r requirements-dev.txt                 # test deps (pytest, pytest-bdd)
 
-python interchange.py --reindex                     # build the local Chroma index
+python interchange.py --reindex                     # build the local Chroma index (.md/.txt/.pdf; PDF via pypdf, flat text — ADR-0010)
 python interchange.py --ask "what is an 824?"       # one-shot RAG
 python interchange.py --agent --explain --ask "…"   # agentic loop on your Claude subscription
 python interchange.py --audit                       # governance / cost dashboard

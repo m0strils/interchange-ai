@@ -31,6 +31,8 @@ one and both stay in the log.
 | [0007](0007-retrieval-strategy.md) | Retrieval strategy — hybrid, structure-aware, measured | Accepted → **hybrid + tiny eval now** |
 | [0008](0008-evaluation-gate.md) | Answer-quality evaluation — refusal-/answer-correctness, advisory | Accepted → **`--grade`, $0, advisory** |
 | [0009](0009-observability.md) | Observability — OpenTelemetry tracing viewed in a local Phoenix | Accepted → **OTel + Phoenix, off by default** |
+| [0010](0010-document-ingestion-formats.md) | Document ingestion formats — PDF via pypdf (BSD) over pymupdf4llm (AGPL) | Accepted → **pypdf, flat text, no OCR** |
+| [0011](0011-strands-comparison.md) | Agentic orchestration trade-offs — Interchange's explicit loop vs. Strands' model-driven | Proposed → **reference architecture comparison** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_

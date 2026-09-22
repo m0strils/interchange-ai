@@ -89,12 +89,34 @@ def chunk(text: str) -> list[dict]:
     return chunks
 
 
+def _extract_pdf(path: str) -> str:
+    """Extract flat text from a PDF (pypdf, BSD-3, offline, $0 — ADR-0010).
+    No OCR: scanned/image-only PDFs yield "". No Markdown headings, so PDF text
+    lands in chunk()'s "preamble" section (ADR-0010 consequence)."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(path)
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _read_document(path: str) -> str:
+    """Route by suffix: .pdf -> pypdf text extraction; everything else -> plain
+    UTF-8 text (the original .md/.txt behavior, now centralized)."""
+    if path.lower().endswith(".pdf"):
+        return _extract_pdf(path)
+    return pathlib.Path(path).read_text(encoding="utf-8")
+
+
 def build_index():
     import chromadb
 
-    files = sorted(glob.glob(str(DOCS_DIR / "*.md")) + glob.glob(str(DOCS_DIR / "*.txt")))
+    files = sorted(
+        glob.glob(str(DOCS_DIR / "*.md"))
+        + glob.glob(str(DOCS_DIR / "*.txt"))
+        + glob.glob(str(DOCS_DIR / "*.pdf"))
+    )
     if not files:
-        sys.exit(f"No docs found in {DOCS_DIR}. Add .md/.txt files and retry.")
+        sys.exit(f"No docs found in {DOCS_DIR}. Add .md/.txt/.pdf files and retry.")
 
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     # fresh rebuild so re-runs are idempotent
@@ -105,15 +127,26 @@ def build_index():
     col = client.create_collection(COLLECTION)  # default LOCAL embeddings
 
     ids, docs, metas = [], [], []
+    skipped = 0
     for path in files:
         name = os.path.basename(path)
-        text = pathlib.Path(path).read_text(encoding="utf-8")
+        text = _read_document(path)
+        if not text.strip():
+            # Honest-ingest guard: pypdf has no OCR, so a scanned/image-only PDF
+            # extracts to "". Silently indexing nothing would be a telemetry lie
+            # (ADR-0004 spirit) — warn, skip, and count it instead.
+            print(f"WARN: no extractable text in {name} — skipping (scanned PDF? no OCR)")
+            skipped += 1
+            continue
         for j, ch in enumerate(chunk(text)):
             ids.append(f"{name}:{j}")
             docs.append(ch["text"])
             metas.append({"source": name, "chunk": j, "section": ch["section"]})
     col.add(ids=ids, documents=docs, metadatas=metas)
-    print(f"Indexed {len(docs)} chunks from {len(files)} files -> {CHROMA_DIR}")
+    summary = f"Indexed {len(docs)} chunks from {len(files) - skipped} files -> {CHROMA_DIR}"
+    if skipped:
+        summary += f" ({skipped} skipped: no extractable text)"
+    print(summary)
 
 
 # --- retrieval primitives (pure, offline, $0) -----------------------------

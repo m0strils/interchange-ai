@@ -56,8 +56,10 @@ python interchange.py --audit                        # governance/cost summary
 ```
 
 Embeddings run locally (Chroma's default model) — the only external call is
-generation (Claude). Drop your own `.md`/`.txt` domain docs into `docs/` and
-re-index; the included files are illustrative seed content.
+generation (Claude). Drop your own `.md`/`.txt`/`.pdf` domain docs into `docs/`
+and re-index; the included files are illustrative seed content. PDF text
+extracts flat (via `pypdf`, BSD — [ADR-0010](docs/adr/0010-document-ingestion-formats.md)),
+so PDF chunks land in the `"preamble"` section rather than under a heading.
 
 ### Engines (cost control)
 Generation is pluggable — an enterprise pattern (model/provider routing) in miniature:
@@ -76,7 +78,7 @@ request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
 ## Architecture (MVP)
 
 ```
-docs/*.md ──chunk──> Chroma (local vectors)
+docs/*.md,*.txt,*.pdf ──chunk──> Chroma (local vectors)
                          │  top-k retrieve
 user ──input guardrail──> Claude (context = data, not instructions)
                          │
