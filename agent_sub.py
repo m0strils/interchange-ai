@@ -28,7 +28,15 @@ import time
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 from enterprise import GuardrailViolation, audit, guard_input, guard_output
-from interchange import DOCS_DIR, MODEL, _explain, discover_files, parse_claude_usage, rel_source
+from interchange import (
+    DOCS_DIR,
+    MODEL,
+    _explain,
+    discover_files,
+    headless_cwd,
+    parse_claude_usage,
+    rel_source,
+)
 
 _HERE = pathlib.Path(__file__).parent
 _MCP_SERVER = _HERE / "mcp_server.py"
@@ -50,7 +58,12 @@ SYSTEM_PROMPT = (
 
 def answer_agentic_sub(question: str, explain: bool = False) -> str:
     """Answer via the subscription agent (claude -p + MCP). Same guardrails as the
-    API loop; runs on your Claude subscription at $0 marginal cost."""
+    API loop; runs on your Claude subscription at $0 marginal cost.
+
+    The headless session runs in `headless_cwd()` with `--setting-sources user` so
+    the child Claude must not inherit the calling repo's project settings and hooks
+    (a project Stop hook would otherwise return hook commentary in place of the
+    answer, flagged UNGROUNDED — ADR-0004 update)."""
     # -- enterprise: input guardrail (unchanged) --
     if explain:
         _explain("stage 1 input guardrail (OWASP LLM01)")
@@ -86,6 +99,7 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
         "--allowedTools", _ALLOWED_TOOLS,
         "--append-system-prompt", SYSTEM_PROMPT,
         "--output-format", "json",
+        "--setting-sources", "user",
     ]
     if explain:
         _explain(f"stage 2 launching headless Claude Code on your subscription "
@@ -98,7 +112,7 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
     t0 = time.monotonic()
     with obs.span("agent", **{"openinference.span.kind": "AGENT", "input.value": question}):
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240,
-                              cwd=str(_HERE), env=env)
+                              cwd=headless_cwd(), env=env)
     latency_ms = int((time.monotonic() - t0) * 1000)
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")

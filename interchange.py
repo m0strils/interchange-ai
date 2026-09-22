@@ -24,6 +24,7 @@ import pathlib
 import posixpath
 import re
 import sys
+import tempfile
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 
@@ -33,6 +34,21 @@ DOCS_DIR = pathlib.Path(
 )
 CHROMA_DIR = str(pathlib.Path(__file__).parent / ".chroma")
 COLLECTION = os.environ.get("INTERCHANGE_COLLECTION", "edi")
+
+# Headless `claude -p` must never run inside the calling repo: a child Claude
+# session started in a repo loads that repo's `.claude/` project settings and
+# hooks (e.g. a Stop hook that runs the test gate), and its reply comes back as
+# hook commentary instead of the answer. Run every headless session in a
+# dedicated repo-free temp dir so only user-level settings apply (ADR-0004).
+HEADLESS_CWD = pathlib.Path(tempfile.gettempdir()) / "interchange-headless"
+
+
+def headless_cwd() -> str:
+    """Working directory for headless `claude -p` sessions, created if absent — a
+    repo-free temp dir so the child session cannot inherit the calling repo's
+    project settings and hooks. Shared by the RAG engine and the sub agent."""
+    HEADLESS_CWD.mkdir(parents=True, exist_ok=True)
+    return str(HEADLESS_CWD)
 
 # The corpus a single request reads. `answer_detail(collection=...)` — and the
 # HTTP `corpus` parameter behind it — override COLLECTION for one call without
@@ -1015,6 +1031,10 @@ def _generate_claude_code(user_content: str) -> dict:
     subscription (Pro/Max) instead of metered API billing. Reads MEASURED usage
     and cost from `--output-format json` (ADR-0004); falls back to a labeled
     ~4-chars/token estimate only if the CLI omits usage.
+
+    Runs in `headless_cwd()` with `--setting-sources user` so the child session
+    never inherits the calling repo's project settings and hooks (a project Stop
+    hook would otherwise hijack the reply with hook commentary — ADR-0004 update).
     """
     import shutil
     import subprocess
@@ -1023,8 +1043,9 @@ def _generate_claude_code(user_content: str) -> dict:
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
     proc = subprocess.run(
         ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
-         "--output-format", "json"],
+         "--output-format", "json", "--setting-sources", "user"],
         capture_output=True, text=True, timeout=180,
+        cwd=headless_cwd(),
     )
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")
