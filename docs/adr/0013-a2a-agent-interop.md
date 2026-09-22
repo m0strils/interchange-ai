@@ -128,4 +128,44 @@ exist.
 - No push notifications, no gRPC transport, and no cross-agent router ship this sprint.
 
 **Deviations found during implementation**
-- none recorded yet
+- The A2A executor (`InterchangeExecutor`) originally called `interchange.answer_detail`
+  with no `collection` override, relying entirely on the process-wide
+  `INTERCHANGE_COLLECTION` env var set once at process start. That works for
+  `demo.sh` (one profile per subprocess) but silently broke the stronger claim —
+  that a `DEMO_PROFILE` switch changes the corpus a *given mounted agent* reads —
+  the moment two profiles are mounted in the same process, which is exactly what
+  the offline test suite needs to do to exercise both `rail` and `hotel` without
+  shelling out twice. Fixed by binding each `InterchangeExecutor` to its profile's
+  `collection` at `mount_a2a()` time and threading it through
+  `answer_detail(collection=...)` per call, so the vertical is genuinely
+  request-scoped data, not an ambient env var. `demo.sh`'s behavior is unchanged
+  (the profile's collection and `INTERCHANGE_COLLECTION` already agreed).
+- `interchange._generate_stub` originally returned a fixed sentence that only
+  varied by cited filename, never by retrieved content. That is enough to pass
+  the grounding guardrail, but it meant the offline demo's answer for the rail
+  profile never actually contained "997" (the sample question's own keyword) —
+  the acceptance gate's `AC-rail` grep would fail no matter what the A2A layer
+  did, since the retrieved chunk's *filename* (`x12-overview.md`) doesn't
+  contain the term. Fixed by having the stub echo a short snippet of the first
+  retrieved chunk's actual text alongside its `[source]` citation, so the
+  canned reply is representative of what retrieval actually found. The hotel
+  profile passed by coincidence before this fix (its top source filename,
+  `late-checkout-policy.md`, happens to contain "checkout"); the fix removes
+  the same latent fragility there. `tests/test_http_api.py`'s
+  `test_stub_engine_answers_grounded` only asserts the `[source]` citation
+  substring and was not touched, and still passes unmodified.
+- The plan's package name (`a2a_agent`, not `a2a`) and the ephemeral-demo-key
+  approach (`a2a_agent/demo.sh` mints a throwaway ES256 pair per run and pins
+  it via `A2A_PINNED_PUBLIC_KEY_PEM`, since a fresh clone has no private key)
+  were both already decided and built by the time this pass started — see
+  the "Package name" and "Gap the plan must close" sections of
+  `learning/a2a-acceptance-criteria.md`. `tests/test_a2a.py` uses the identical
+  pattern: each test mints its own ephemeral pair via
+  `a2a_agent.keys.generate_keypair()` and monkeypatches the same env vars
+  before calling `app.create_app()`, rather than relying on any committed key.
+- No SDK API surprises: `a2a-sdk` 1.1.5's `A2ACardResolver` and `create_client`
+  both accept an injected `httpx.AsyncClient`, which meant the whole suite
+  could run against `httpx.ASGITransport(app=...)` in-process — no server
+  socket, no subprocess — for every scenario except the literal `make
+  a2a-demo` smoke test, which intentionally does start a real `uvicorn`
+  process (that is the thing AC3 checks it also stops).

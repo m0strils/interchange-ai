@@ -362,16 +362,23 @@ def _generate_claude_code(user_content: str) -> dict:
 def _generate_stub(user_content: str) -> dict:
     """Offline canned generation — never touches a network or a subprocess.
 
-    Cites the first source in the context it was handed so the answer passes the
-    grounding guardrail, and labels its token counts `estimated` (ADR-0004: a
-    canned number is a guess, and says so). Used for demos and smoke tests where
-    the point is the governed pipeline, not the model."""
-    m = re.search(r"^\[([^\]\n]+)\]", user_content, re.MULTILINE)
-    source = m.group(1) if m else "context"
+    Cites the first source in the context it was handed (so the answer passes
+    the grounding guardrail) and echoes a short snippet of that chunk's actual
+    text — not the model's own words, there is no model, but enough of the
+    retrieved passage that the reply is representative of what was actually
+    found rather than a fixed sentence that never varies with the question.
+    Labels its token counts `estimated` (ADR-0004: a canned number is a
+    guess, and says so). Used for demos and smoke tests where the point is
+    the governed pipeline, not the model."""
+    m = re.search(r"^\[([^\]\n]+)\]\n(.*?)(?=\n\n|\Z)", user_content, re.MULTILINE | re.DOTALL)
+    if m:
+        source, snippet = m.group(1), " ".join(m.group(2).split())[:220]
+    else:
+        source, snippet = "context", ""
     text = (
-        f"(stub engine) The retrieved context answers this question [{source}]. "
-        "No model was called — this reply is canned for offline runs."
-    )
+        f"(stub engine) [{source}] {snippet} "
+        "(no model was called — this reply echoes the retrieved passage for an offline run)"
+    ).strip()
     return {"text": text, "in": 64, "out": 32, "cost": 0.0,
             "telemetry": "estimated", "model": "stub"}
 

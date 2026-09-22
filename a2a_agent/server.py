@@ -172,17 +172,24 @@ def build_agent_card(base_url: str, profile: dict) -> AgentCard:
 
 
 # --- the guarded work ------------------------------------------------------
-def _answer_as(label: str, question: str) -> dict:
+def _answer_as(label: str, question: str, collection: str | None = None) -> dict:
     """Run the governed pipeline attributed to ``a2a:<label>``.
 
     Runs on a worker thread (the pipeline is blocking), so CALLER is set *inside*
     the thread: ``asyncio.to_thread`` copies the context, but setting it here
     means the attribution is right no matter how the call is scheduled.
+
+    ``collection`` is this agent's profile corpus (``profiles.yaml``), passed
+    through to ``answer_detail`` so a hotel-profile agent reads the hotel corpus
+    even when ``INTERCHANGE_COLLECTION`` was never re-exported for this process
+    (e.g. two profiles mounted in the same test process).
     """
     token = enterprise.CALLER.set(f"a2a:{label}")
     try:
         return interchange.answer_detail(
-            question, engine=os.environ.get("INTERCHANGE_ENGINE", "api")
+            question,
+            engine=os.environ.get("INTERCHANGE_ENGINE", "api"),
+            collection=collection,
         )
     finally:
         enterprise.CALLER.reset(token)
@@ -200,6 +207,11 @@ class InterchangeExecutor(AgentExecutor):
     carries the block reason.
     """
 
+    def __init__(self, collection: str | None = None) -> None:
+        #: this agent's profile corpus (``profiles.yaml`` ``collection:``),
+        #: bound at mount time so the vertical is data, not code.
+        self._collection = collection
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         # The submitted Task object itself is the first event: the 1.1 runtime
         # rejects a status update for a task it has never seen
@@ -216,7 +228,7 @@ class InterchangeExecutor(AgentExecutor):
         headers = context.call_context.state.get("headers", {}) or {}
         label = caller_label(headers.get(api_key_header().lower()))
 
-        detail = await asyncio.to_thread(_answer_as, label, question)
+        detail = await asyncio.to_thread(_answer_as, label, question, self._collection)
 
         if detail["blocked"]:
             await updater.failed(
@@ -324,7 +336,7 @@ def mount_a2a(app, base_url: str, profile: dict | None = None) -> AgentCard:
     card = build_agent_card(base_url, profile)
 
     handler = DefaultRequestHandler(
-        agent_executor=InterchangeExecutor(),
+        agent_executor=InterchangeExecutor(collection=profile.get("collection")),
         task_store=InMemoryTaskStore(),
         agent_card=card,
     )
