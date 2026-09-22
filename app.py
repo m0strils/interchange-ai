@@ -14,8 +14,15 @@ call and the governance verdict back to a status code:
 A blocked question is a *successful* guardrail, so it answers 400 with the same
 detail dict (blocked reason included) rather than a bare error.
 
-No auth and no rate limit yet — deliberately scheduled, not forgotten; this
-surface is local/demo-only until they land.
+The same app also carries the agent-to-agent surface (ADR-0013), mounted by
+``a2a_agent.server.mount_a2a``: a signed Agent Card at
+``/.well-known/agent-card.json`` and an API-key-gated JSON-RPC task endpoint at
+``/a2a``. One deploy, two integration shapes — REST for a human-built client,
+A2A for a peer agent — over one governed core.
+
+No auth and no rate limit on ``/ask`` yet — deliberately scheduled, not
+forgotten; that surface is local/demo-only until they land. ``/a2a`` does
+require a key.
 
 Run:  uvicorn app:app --reload
 """
@@ -27,6 +34,7 @@ from fastapi import Body, FastAPI, Query
 from fastapi.responses import JSONResponse
 
 import interchange
+from a2a_agent.server import mount_a2a
 
 
 def default_engine() -> str:
@@ -62,6 +70,9 @@ def create_app() -> FastAPI:
     def ask_post(q: str = Body(...), corpus: str | None = Body(None)) -> JSONResponse:
         return _ask(q, corpus)
 
+    # Agent-to-agent surface (ADR-0013). The card advertises this base URL, so it
+    # has to be the URL peers actually reach us on — Render sets A2A_PUBLIC_URL.
+    mount_a2a(app, base_url=os.environ.get("A2A_PUBLIC_URL", "http://localhost:8000"))
     return app
 
 
