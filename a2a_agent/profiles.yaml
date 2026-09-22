@@ -13,6 +13,10 @@ rail:
   docs_dir: docs
   golden: eval/golden.jsonl
   sample_question: "What is a 997 and when is it sent?"
+  examples:
+    - "What is a 997 and when is it sent?"
+    - "What is an 824 application advice?"
+    - "How does an ISA envelope differ from a GS functional group?"
   knowledge_agent_name: interchange-knowledge (rail)
   requester_name: interchange-requester (rail)
   description: >
@@ -23,6 +27,10 @@ hotel:
   collection: hotel
   docs_dir: hotel-demo
   sample_question: "Can a guest get a late checkout at 2 pm, and is there a fee?"
+  examples:
+    - "Can a guest get a late checkout at 2 pm, and is there a fee?"
+    - "What is the cancellation policy for a non-refundable rate?"
+    - "Are pets allowed, and what is the pet fee?"
   knowledge_agent_name: interchange-knowledge (hotel)
   requester_name: interchange-requester (hotel)
   description: >
@@ -42,6 +50,10 @@ vault:
     - "scripts/"
   golden: eval/golden-vault.jsonl
   sample_question: "How many tags should a single document normally carry?"
+  examples:
+    - "How many tags should a single document normally carry?"
+    - "What does the PARA layout organise notes into?"
+    - "Where do fleeting notes live before they are processed?"
   knowledge_agent_name: interchange-knowledge (vault)
   requester_name: interchange-requester (vault)
   description: >

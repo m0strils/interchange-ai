@@ -2,7 +2,7 @@
 
 Gherkin in features/answer_quality.feature. Every external boundary is stubbed so the
 run is offline and free (never calls a live model, embeddings, or Chroma):
-  * retrieval:  interchange.retrieve -> a canned passage
+  * retrieval:  interchange.retrieve_detail -> a canned passage
   * generation: interchange.ENGINES["claude-code"] -> a canned engine dict
   * judge:      eval_judge._run_judge -> a canned verdict JSON string
   * grade log:  eval_judge.GRADE_LOG -> a tmp file (never the real one)
@@ -17,6 +17,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 import eval_judge
 import interchange
+from tests.conftest import fake_retrieval
 
 scenarios("answer_quality.feature")
 
@@ -34,8 +35,11 @@ def golden_one_unanswerable(context, tmp_path, monkeypatch):
 
 @given(parsers.parse('retrieval returns an irrelevant passage from "{source}"'))
 def stub_retrieval(context, monkeypatch, source):
-    passage = ("ANSI ASC X12 is an EDI standard.", {"source": source, "chunk": 0})
-    monkeypatch.setattr(interchange, "retrieve", lambda q: [passage])
+    monkeypatch.setattr(
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": source, "text": "ANSI ASC X12 is an EDI standard.", "chunk": 0}),
+    )
 
 
 def _install_engine(monkeypatch, text):

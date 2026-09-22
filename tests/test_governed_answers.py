@@ -6,7 +6,7 @@ so every run is offline, free, and deterministic (never calls a live model).
 
 Stub seams (per the shared contract):
   * RAG:          fake engine injected into ``interchange.ENGINES["api"]`` +
-                  ``interchange.retrieve`` patched to a canned passage.
+                  ``interchange.retrieve_detail`` patched to a canned passage.
   * Subscription: ``agent_sub.subprocess.run`` returns a canned ``claude -p`` JSON
                   and ``agent_sub.shutil.which`` reports the CLI as installed.
 
@@ -22,7 +22,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 import agent_sub
 import interchange
-from tests.conftest import last_audit_row
+from tests.conftest import fake_retrieval, last_audit_row
 
 scenarios("governed_answers.feature")
 
@@ -47,8 +47,11 @@ def fresh_audit_log(context, isolated_audit_log):
 
 @given(parsers.parse('the knowledge base returns a passage from "{source}"'))
 def kb_returns_passage(context, monkeypatch, source):
-    passage = ("An 824 reports application errors.", {"source": source, "chunk": 0})
-    monkeypatch.setattr(interchange, "retrieve", lambda q: [passage])
+    monkeypatch.setattr(
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": source, "text": "An 824 reports application errors.", "chunk": 0}),
+    )
     context["source"] = source
 
 

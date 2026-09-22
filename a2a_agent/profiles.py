@@ -60,6 +60,20 @@ def load_profile(name: str | None = None) -> dict:
     return profile
 
 
+def profile_examples(profile: dict | None = None) -> list[str]:
+    """The example questions this profile ships (workbench cold-start + ``/options``).
+
+    Reads the ``examples`` list of ``profile`` (or the active profile). Tolerant: a
+    profile whose ``docs_dir`` cannot expand yet (e.g. ``vault`` with no env) returns
+    ``[]`` rather than failing an unauthenticated ``/options`` request.
+    """
+    try:
+        p = profile or load_profile()
+    except (SystemExit, KeyError):
+        return []
+    return [str(e) for e in (p.get("examples") or [])]
+
+
 def profile_env(profile: dict) -> dict[str, str]:
     """The environment variables the runtime reads for this profile.
 

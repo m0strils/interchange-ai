@@ -35,6 +35,7 @@ one and both stay in the log.
 | [0011](0011-strands-comparison.md) | Agentic orchestration trade-offs — Interchange's explicit loop vs. Strands' model-driven | Proposed → **reference architecture comparison** |
 | [0013](0013-a2a-agent-interop.md) | Agent-to-agent interop over A2A with signed Agent Cards | Accepted → **A2A 1.0 + 0.3 compat, signed card, pinned kid** |
 | [0014](0014-vault-corpus-and-measured-ablations.md) | Vault corpus: recursive ingestion, read-only profile, measured ablations | Accepted → **reranker trigger fired (hit@1 11→15/18); link expansion regressed, deferred** |
+| [0015](0015-browser-workbench-surface.md) | Browser workbench over the same governed pipeline — scored retrieval, policy tier, streamed stages | Accepted → **vendored no-build Preact at `/ui`, `POST /ask/stream` SSE, env-is-policy** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
