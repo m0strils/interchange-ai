@@ -1,0 +1,38 @@
+# watsonx Orchestrate external-agent registration for the Interchange
+# knowledge agent.
+#
+# Replace <render-host> below with the actual Render deploy host once the
+# server is deployed. Then register and verify with:
+#
+#   orchestrate agents import -f a2a_agent/orchestrate/interchange-knowledge.yaml
+#   orchestrate agents discover -u https://<render-host>
+#
+# `provider: external_chat/A2A/0.3.0` targets the A2A 0.3 interface, which is
+# what watsonx Orchestrate registers external A2A agents against as of this
+# writing. The Interchange server serves that interface via the a2a-sdk's 0.3
+# compat flag, alongside its native 1.0 JSON-RPC interface (see ADR-0013).
+#
+# This targets a 30-day watsonx Orchestrate trial tenant. It is a personal
+# demo registration, not a production integration.
+spec_version: v1
+kind: external
+name: interchange_knowledge
+title: Interchange Knowledge Agent
+nickname: interchange_knowledge
+provider: external_chat/A2A/0.3.0
+description: >
+  Grounded knowledge agent over the Interchange corpus (rail/EDI or a demo
+  hotel profile, per DEMO_PROFILE). Answers are retrieved and cited, with an
+  input guardrail and an output grounding check on every request.
+tags:
+  - a2a
+  - rag
+  - knowledge
+api_url: "https://<render-host>/a2a"
+auth_scheme: API_KEY
+auth_config:
+  token: "${A2A_API_KEY}"
+chat_params:
+  stream: false
+config:
+  hidden: false

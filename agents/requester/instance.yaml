@@ -1,0 +1,29 @@
+# agent-factory-kit instance declaration.
+#
+# This describes the requester agent (the A2A client demo driver) for the
+# agent-factory-kit's catalog and certification tooling. Certification by
+# agent-factory-kit itself is a later step; this file is the declaration it
+# would certify against, not a claim that certification has run.
+
+name: requester
+role: >
+  Demo client that sends a task to the interchange-knowledge agent over A2A,
+  verifies its signed Agent Card, and streams task events to the console.
+tier: read-only
+harness: a2a-sdk
+
+blast_radius:
+  writes: []
+  never:
+    - ".env"
+    - "*.pem"
+    - "audit.jsonl"
+  network:
+    - outbound to the interchange-knowledge agent's /a2a endpoint only
+    - no remote key fetch (jku) is followed when verifying the Agent Card
+
+rails:
+  - input guardrail applies to any free-text question the requester forwards
+  - signed card verification (JWS ES256, pinned kid; refuses jku/unknown-kid/unsigned)
+  - api-key sent on the JSON-RPC path
+  - caller identity attached to every request for the audit log

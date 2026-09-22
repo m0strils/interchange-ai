@@ -33,6 +33,7 @@ one and both stay in the log.
 | [0009](0009-observability.md) | Observability — OpenTelemetry tracing viewed in a local Phoenix | Accepted → **OTel + Phoenix, off by default** |
 | [0010](0010-document-ingestion-formats.md) | Document ingestion formats — PDF via pypdf (BSD) over pymupdf4llm (AGPL) | Accepted → **pypdf, flat text, no OCR** |
 | [0011](0011-strands-comparison.md) | Agentic orchestration trade-offs — Interchange's explicit loop vs. Strands' model-driven | Proposed → **reference architecture comparison** |
+| [0013](0013-a2a-agent-interop.md) | Agent-to-agent interop over A2A with signed Agent Cards | Accepted → **A2A 1.0 + 0.3 compat, signed card, pinned kid** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_

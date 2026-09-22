@@ -1,0 +1,31 @@
+# agent-factory-kit instance declaration.
+#
+# This describes the interchange-knowledge agent for the agent-factory-kit's
+# catalog and certification tooling. Certification by agent-factory-kit
+# itself is a later step; this file is the declaration it would certify
+# against, not a claim that certification has run.
+
+name: interchange-knowledge
+role: >
+  Answers grounded questions over the Interchange corpus (rail/EDI or a demo
+  hotel profile) and returns cited, guardrail-checked responses over A2A.
+tier: tool-using-read-only
+harness: a2a-sdk
+
+blast_radius:
+  writes: []
+  never:
+    - ".env"
+    - "*.pem"
+    - "audit.jsonl"
+  network:
+    - outbound to the Anthropic API (or the local Claude subscription path)
+    - local Chroma vector store (read-only queries)
+    - no other outbound network access
+
+rails:
+  - input guardrail (prompt-injection heuristics, OWASP LLM01/ASI01) runs unchanged on the A2A path
+  - output grounding check before any answer is returned
+  - signed Agent Card (JWS ES256, pinned kid) for identity
+  - API key required on the JSON-RPC path
+  - caller recorded in the audit log for every task

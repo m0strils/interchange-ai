@@ -15,6 +15,7 @@ Usage (wired into interchange.py):
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import pathlib
 import re
@@ -22,6 +23,11 @@ import time
 import uuid
 
 AUDIT_PATH = pathlib.Path(__file__).parent / "audit.jsonl"
+
+# Who is asking. Set by a calling surface (the HTTP API / an A2A peer) so the
+# audit row records the caller identity; None on the CLI path. A ContextVar
+# keeps it request-scoped without threading an argument through the pipeline.
+CALLER: contextvars.ContextVar[str | None] = contextvars.ContextVar("caller", default=None)
 
 # --- 1) input guardrail (OWASP LLM01: prompt injection) --------------------
 # Heuristic first line of defense. Enterprise stack layers this with a
@@ -130,6 +136,7 @@ def audit(
         "latency_ms": latency_ms,
         "grounded": grounded,
         "blocked": blocked,
+        "caller": CALLER.get(),
     }
     with AUDIT_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")

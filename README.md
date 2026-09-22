@@ -111,3 +111,37 @@ user ──input guardrail──> Claude (context = data, not instructions)
 ## License / data
 MIT. The `docs/` content is generic, public-knowledge EDI/rail reference
 material — no proprietary partner specifications are included.
+
+## Agent-to-agent: A2A
+Interchange also speaks to other *agents*, not just tools. The `a2a_agent/`
+package adds an Agent-to-Agent (A2A) protocol surface: a signed Agent Card
+for discovery and identity, an API-keyed JSON-RPC task path, and a
+`requester` client that verifies the card before sending a task. The same
+guarded core answers either — the input guardrail and output grounding check
+run unchanged on this path, same as every other.
+
+Run the demo with `make a2a-demo PROFILE=hotel` (or `PROFILE=rail`) to see
+the requester fetch and verify the signed card, submit a task, and stream
+its events; `pytest -q tests/test_a2a.py` runs the offline test suite for it.
+`DEMO_PROFILE=rail|hotel` points the same agent code at either this repo's
+EDI/rail corpus or a small self-authored hotel-policy corpus (`hotel-demo/`),
+to show the agent generalizes past rail/EDI without new code — see
+[ADR-0013](docs/adr/0013-a2a-agent-interop.md) and
+[Lesson 07](lessons/07-a2a-handoff.md).
+
+Honest limits: this is a personal build, not a fielded multi-tenant service.
+The watsonx Orchestrate registration (`a2a_agent/orchestrate/`) targets a
+30-day trial tenant, not a production account. The hotel corpus is
+self-authored demo content, not any real hotel's actual policy. Push
+notifications, gRPC transport, and a cross-agent router are out of scope
+this sprint.
+
+| Protocol | Role | Transport | Identity | Where in this repo |
+|---|---|---|---|---|
+| MCP | agent-to-tool | stdio | trusted local process, tool schemas | `mcp_server.py` |
+| A2A | agent-to-agent | HTTP (JSON-RPC, 1.0 + 0.3 compat) | signed Agent Card (JWS ES256, pinned `kid`), API key per caller | `a2a_agent/` |
+
+**OWASP Agentic Top 10 mapping**
+- **ASI01 — goal hijack:** the input guardrail runs unchanged on the A2A path; no lighter-weight check for an agent caller.
+- **ASI03 — identity and privilege abuse:** signed card, pinned `kid`, API key per caller, per-agent tier declaration, caller recorded in the audit log.
+- **ASI07 — insecure inter-agent communication:** JCS+JWS card integrity with tests for tampered/unsigned/unknown-`kid` rejection, TLS transport, no remote (`jku`) key fetch.

@@ -1,0 +1,27 @@
+# A2A demo profiles.
+#
+# Hospitality is a profile, not code. The rail/EDI knowledge agent and the
+# hotel knowledge agent are the same a2a_agent code path pointed at a
+# different corpus, collection, and sample question via DEMO_PROFILE. Adding
+# a third vertical means adding a block here, not writing new agent logic.
+
+rail:
+  collection: edi
+  docs_dir: docs
+  sample_question: "What is a 997 and when is it sent?"
+  knowledge_agent_name: interchange-knowledge (rail)
+  requester_name: interchange-requester (rail)
+  description: >
+    Answers questions about X12/EDI transaction sets and rail trading-partner
+    integration, grounded in this repo's docs/ corpus.
+
+hotel:
+  collection: hotel
+  docs_dir: hotel-demo
+  sample_question: "Can a guest get a late checkout at 2 pm, and is there a fee?"
+  knowledge_agent_name: interchange-knowledge (hotel)
+  requester_name: interchange-requester (hotel)
+  description: >
+    Answers questions about a fictional Demo Hotel's cancellation, late
+    checkout, and pet policies, grounded in the self-authored hotel-demo/
+    corpus.

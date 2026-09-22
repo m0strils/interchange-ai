@@ -15,6 +15,9 @@ python interchange.py --ask "what is an 824?"       # one-shot RAG
 python interchange.py --agent --explain --ask "…"   # agentic loop on your Claude subscription
 python interchange.py --audit                       # governance / cost dashboard
 python -m pytest -q                                 # the test gate (offline, free)
+uvicorn app:app                                     # HTTP: /health, /ask, signed A2A card + /a2a (ADR-0013)
+make a2a-demo PROFILE=hotel                         # two-agent A2A demo, $0 on the stub engine (rail|hotel)
+scripts/a2a-accept.sh                               # A2A Goal A acceptance gate (run with INTERCHANGE_ENGINE=claude-code)
 ```
 
 ## Architecture & conventions

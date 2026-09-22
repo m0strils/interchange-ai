@@ -38,6 +38,12 @@ don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard))
   the agent) to a local Phoenix atop the always-on audit log; why auto-instrumentation
   finds nothing to patch here, and how the first traced agent run surfaced a latent
   MCP-server bug.
+- **[Lesson 07 — Handing off to another agent over A2A](lessons/07-a2a-handoff.md)** —
+  add an agent-to-agent surface (signed Agent Card, JWS/JCS integrity, pinned key,
+  task lifecycle with streaming) alongside the existing agent-to-tool (MCP) surface,
+  serving both the current A2A 1.0 interface and a 0.3 compat interface so an
+  enterprise orchestration platform can register the agent today; mapped to
+  OWASP Agentic ASI01/ASI03/ASI07.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
