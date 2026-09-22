@@ -91,10 +91,13 @@ make a2a-demo PROFILE=hotel      # or PROFILE=rail
 pytest -q tests/test_a2a.py
 ```
 
-`DEMO_PROFILE=rail|hotel` points the same agent code at either this repo's
-existing EDI/rail corpus or a small, self-authored hotel-policy corpus
-(`hotel-demo/`), to show the knowledge-agent shape isn't rail-specific — the
-profile is data (`a2a_agent/profiles.yaml`), not new code.
+`PROFILE=rail|hotel` on `make a2a-demo` (`--profile` on the requester) points
+the same agent code at either this repo's existing EDI/rail corpus or a
+small, self-authored hotel-policy corpus (`hotel-demo/`), to show the
+knowledge-agent shape isn't rail-specific — the profile is data
+(`a2a_agent/profiles.yaml`), not new code. For the manual two-terminal run
+with a real model, and for live runs generally, see
+[a2a_agent/README.md](../a2a_agent/README.md).
 
 ## What this does not prove
 

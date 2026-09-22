@@ -123,11 +123,14 @@ run unchanged on this path, same as every other.
 Run the demo with `make a2a-demo PROFILE=hotel` (or `PROFILE=rail`) to see
 the requester fetch and verify the signed card, submit a task, and stream
 its events; `pytest -q tests/test_a2a.py` runs the offline test suite for it.
-`DEMO_PROFILE=rail|hotel` points the same agent code at either this repo's
-EDI/rail corpus or a small self-authored hotel-policy corpus (`hotel-demo/`),
-to show the agent generalizes past rail/EDI without new code — see
+`PROFILE=rail|hotel` on `make a2a-demo` (`--profile` on the requester) points
+the same agent code at either this repo's EDI/rail corpus or a small
+self-authored hotel-policy corpus (`hotel-demo/`), to show the agent
+generalizes past rail/EDI without new code — see
 [ADR-0013](docs/adr/0013-a2a-agent-interop.md) and
-[Lesson 07](lessons/07-a2a-handoff.md).
+[Lesson 07](lessons/07-a2a-handoff.md). For the manual two-terminal run with
+a real model, and for live runs generally, see
+[a2a_agent/README.md](a2a_agent/README.md).
 
 Honest limits: this is a personal build, not a fielded multi-tenant service.
 The watsonx Orchestrate registration (`a2a_agent/orchestrate/`) targets a
