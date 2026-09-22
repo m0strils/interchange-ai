@@ -16,7 +16,7 @@ if not path:
     sys.exit(0)
 root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 rel = os.path.relpath(os.path.abspath(path), root)
-PROTECTED = ("scripts/a2a-accept.sh", "eval/baseline.json", "eval/golden.jsonl", ".claude/verify-gate", ".claude/hooks/", ".claude/settings.json")
+PROTECTED = ("scripts/a2a-accept.sh", "scripts/workbench-accept.sh", "scripts/workbench_accept.py", "eval/baseline.json", "eval/golden.jsonl", ".claude/verify-gate", ".claude/hooks/", ".claude/settings.json")
 if any(rel == p or rel.startswith(p) for p in PROTECTED):
     print(f"protect-paths: {rel} is protected. Do not edit the gate, the baseline, or the hooks; stop and say why the change seems needed.", file=sys.stderr)
     sys.exit(2)
