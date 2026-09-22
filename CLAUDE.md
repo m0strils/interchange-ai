@@ -18,7 +18,15 @@ python -m pytest -q                                 # the test gate (offline, fr
 uvicorn app:app                                     # HTTP: /health, /ask, signed A2A card + /a2a (ADR-0013)
 make a2a-demo PROFILE=hotel                         # two-agent A2A demo, $0 on the stub engine (rail|hotel)
 scripts/a2a-accept.sh                               # A2A Goal A acceptance gate (run with INTERCHANGE_ENGINE=claude-code)
+make reindex PROFILE=vault                          # index the read-only Obsidian vault corpus (ADR-0014)
+make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the vault golden set (ADR-0014)
+# ^ export INTERCHANGE_VAULT_DIR before both — DOCS_DIR resolves at import, before .env loads (ADR-0014)
 ```
+
+**Status:** ADR-0014 shipped — the vault corpus (188 notes, 4,614 chunks) is
+ingested read-only and its retrieval ablations are **measured** (`eval/eval-runs.jsonl`):
+ADR-0007's reranker trigger fired and paid off (hit@1 11→15/18, local cross-encoder, $0),
+while naive link-aware expansion regressed and stays deferred.
 
 ## Architecture & conventions
 - **Guardrails + audit are the spine** (`enterprise.py`): input guardrail

@@ -18,7 +18,6 @@ Prereqs: the `claude` CLI installed and logged into your subscription, and
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import pathlib
@@ -29,7 +28,7 @@ import time
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 from enterprise import GuardrailViolation, audit, guard_input, guard_output
-from interchange import DOCS_DIR, MODEL, _explain, parse_claude_usage
+from interchange import DOCS_DIR, MODEL, _explain, discover_files, parse_claude_usage, rel_source
 
 _HERE = pathlib.Path(__file__).parent
 _MCP_SERVER = _HERE / "mcp_server.py"
@@ -115,9 +114,11 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
 
     # Grounding check: does the answer cite a real doc? We can't see which sources
     # the sub-session retrieved, so pass the whole doc set as the candidate list —
-    # a citation of any real doc counts as grounded.
-    doc_sources = sorted(os.path.basename(p) for p in
-                         glob.glob(str(DOCS_DIR / "*.md")) + glob.glob(str(DOCS_DIR / "*.txt")))
+    # a citation of any real doc counts as grounded. Use the same recursive,
+    # ignore-aware discovery the index is built from (rel_source, so a nested vault
+    # note matches its folder-qualified citation); identical to the old flat glob on
+    # the seed corpus.
+    doc_sources = sorted(rel_source(DOCS_DIR, p) for p in discover_files(DOCS_DIR))
     text, grounded = guard_output(text, doc_sources)
     if explain:
         shadow = f"${cost:.4f}" if cost is not None else "n/a"

@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import argparse
 import contextvars
-import glob
+import fnmatch
 import os
 import pathlib
+import posixpath
 import re
 import sys
 
@@ -50,7 +51,23 @@ CHUNK_CHARS = 1200          # max section-body size before a section is windowed
 CHUNK_OVERLAP = 150
 TOP_K = 4
 RRF_K = 60                  # Reciprocal Rank Fusion constant (Cormack et al.)
+DENSE_POOL = 20            # dense candidate-pool size fed to fusion (ADR-0007/0014)
+EVAL_DEPTH = 10            # how deep --eval looks for the expected source (rank + near-miss)
+RERANK_N = 30              # fused-candidate window a reranker reorders (ADR-0007/0014).
+                           # Measured: the four hybrid misses on the vault golden set
+                           # sit at fused ranks 5/7/16 (pool 20) — a 30-wide window
+                           # covers them; anything narrower cannot lift them into top-k.
+# Retrieval ablation modes (ADR-0014). "hybrid+links" re-fuses one-hop wikilink
+# neighbours as a third ranking (slice 4). "hybrid+rerank" reorders the top
+# RERANK_N fused candidates with a relevance scorer (slice 5). Keep the tuple
+# extensible — the CLI choices, the --mode all comparison table and fuse_rankings()
+# all read it.
+MODES = ("hybrid", "dense", "bm25", "hybrid+links", "hybrid+rerank")
+# Which rerank backend INTERCHANGE_RERANK selects (ADR-0014). The local
+# cross-encoder is $0 and the default; "typesafe" is metered and opt-in.
+RERANK_BACKEND = os.environ.get("INTERCHANGE_RERANK", "cross-encoder")
 GOLDEN_PATH = pathlib.Path(__file__).parent / "eval" / "golden.jsonl"
+EVAL_LOG = pathlib.Path(__file__).parent / "eval" / "eval-runs.jsonl"
 
 SYSTEM_PROMPT = (
     "You are Interchange, an assistant for questions about X12/EDI and rail "
@@ -122,14 +139,272 @@ def _read_document(path: str) -> str:
     return pathlib.Path(path).read_text(encoding="utf-8")
 
 
+# --- recursive discovery + ignore rules ------------------------------------
+# A corpus can be a whole folder TREE (e.g. a Markdown note vault), not just a
+# flat directory. Discovery walks DOCS_DIR recursively and filters it with a
+# small, gitignore-LITE pattern language (see is_ignored) so housekeeping folders
+# — and this repo's own docs/adr/ — never land in the retrieval index.
+DEFAULT_IGNORE = (".obsidian/", ".trash/", ".git/", "_attachments/")
+INDEX_SUFFIXES = (".md", ".txt", ".pdf")
+IGNORE_FILE = ".interchangeignore"
+
+
+def parse_ignore(text: str) -> list[str]:
+    """Parse an ignore file: one pattern per line, stripped; blank lines and
+    ``#`` comment lines dropped. Surviving lines are is_ignored() patterns."""
+    patterns: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(line)
+    return patterns
+
+
+def load_ignore_patterns(root: pathlib.Path) -> list[str]:
+    """The effective ignore list for the corpus at `root`: DEFAULT_IGNORE, then
+    ``root/.interchangeignore`` if it exists, then the comma-separated
+    ``INTERCHANGE_IGNORE`` env var (one-off excludes without editing the file).
+    There is no negation, so a pattern can only ever ADD exclusions and the
+    order of the union is immaterial."""
+    patterns = list(DEFAULT_IGNORE)
+    ignore_file = root / IGNORE_FILE
+    if ignore_file.exists():
+        patterns += parse_ignore(ignore_file.read_text(encoding="utf-8"))
+    patterns += [
+        p.strip() for p in os.environ.get("INTERCHANGE_IGNORE", "").split(",") if p.strip()
+    ]
+    return patterns
+
+
+def is_ignored(rel_posix: str, patterns: list[str]) -> bool:
+    """Should the file at `rel_posix` (POSIX path relative to the corpus root,
+    last segment = the filename) be excluded from the index?
+
+    gitignore-LITE — deliberately a documented SUBSET, not a half-built clone:
+    **no negation (``!``) and no ``**`` globstar.** The rules, in order:
+
+    1. Any path segment starting with ``.`` is ignored. One rule covers a nested
+       ``.obsidian/`` at any depth, ``.git/``, ``.trash/`` and stray ``.DS_Store``.
+    2. A pattern ending in ``/`` is a DIRECTORY pattern:
+       * if it still contains a ``/`` once the trailing slash is dropped, it is a
+         **path prefix** rooted at the corpus root — matches the prefix itself and
+         anything beneath it;
+       * otherwise it is a **bare directory name** — matches when it equals any
+         segment of the path EXCEPT the last (which is the file).
+    3. A pattern containing ``/`` (no trailing slash) is fnmatch'd against the
+       whole relative path. ``fnmatch``'s ``*`` spans ``/``, so such a pattern
+       reaches into subfolders — the practical stand-in for the ``**`` this
+       subset does not implement.
+    4. Otherwise the pattern is fnmatch'd against the basename.
+
+    Matching uses ``fnmatchcase`` so a case-insensitive macOS filesystem and a
+    case-sensitive Linux one agree on the result.
+    """
+    segments = rel_posix.split("/")
+    if any(seg.startswith(".") for seg in segments):
+        return True
+    basename = segments[-1]
+    for pattern in patterns:
+        if pattern.endswith("/"):
+            prefix = pattern[:-1]
+            if not prefix:
+                continue
+            if "/" in prefix:
+                if rel_posix == prefix or rel_posix.startswith(prefix + "/"):
+                    return True
+            elif prefix in segments[:-1]:
+                return True
+        elif "/" in pattern:
+            if fnmatch.fnmatchcase(rel_posix, pattern):
+                return True
+        elif fnmatch.fnmatchcase(basename, pattern):
+            return True
+    return False
+
+
+def rel_source(root: pathlib.Path, path: pathlib.Path) -> str:
+    """A chunk's ``source``: `path` relative to the corpus root, as POSIX. For a
+    FLAT corpus this is exactly the basename — so the existing golden set, the
+    citations and every ``[source]`` bracket keep working unchanged — while a
+    nested vault gets a folder-qualified source that disambiguates two notes
+    sharing a filename."""
+    return path.relative_to(root).as_posix()
+
+
+def discover_files(root: pathlib.Path, patterns: list[str] | None = None) -> list[pathlib.Path]:
+    """Every indexable file under `root`, RECURSIVELY, sorted by relative POSIX
+    path. Filters to INDEX_SUFFIXES (case-insensitively) and drops anything
+    is_ignored() rejects. `patterns` defaults to load_ignore_patterns(root)."""
+    if patterns is None:
+        patterns = load_ignore_patterns(root)
+    found = [
+        p
+        for p in root.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in INDEX_SUFFIXES
+        and not is_ignored(rel_source(root, p), patterns)
+    ]
+    return sorted(found, key=lambda p: rel_source(root, p))
+
+
+# Credential guard. A corpus grown from a real note vault can contain a pasted
+# API key. Indexing one copies the secret into the vector store AND makes it
+# retrievable into a prompt — so flag and skip the file instead. Same instinct as
+# the empty-text guard below: refuse silently-wrong ingestion (ADR-0004's spirit),
+# here for security rather than telemetry.
+# A credential keyword (api key / secret / password / token) followed by ``:`` or
+# ``=`` and a value token. The value is then vetted by _value_looks_like_credential;
+# capturing the whole non-space run lets that check strip quotes and apply the
+# literal-credential rules, instead of the keyword regex alone deciding.
+_SECRET_KEYWORD_RE = re.compile(
+    r"(?:api[ _-]?key|client[ _-]?secret|password|secret|token)\s*[:=]\s*(\S+)",
+    re.IGNORECASE,
+)
+# Well-known key shapes are flagged REGARDLESS of any keyword — a pasted key needs
+# no label to be dangerous. Anchored, opaque prefixes with fixed lengths so ordinary
+# prose cannot match.
+_WELL_KNOWN_SECRET_RES = (
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),        # Google API key
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),           # OpenAI-style secret key
+    re.compile(r"ghp_[A-Za-z0-9]{36}"),           # GitHub personal access token
+    re.compile(r"xox[abp]-[A-Za-z0-9\-]{20,}"),   # Slack token
+    re.compile(r"AKIA[0-9A-Z]{16}"),              # AWS access key id
+)
+# A literal credential value uses only these characters ...
+_SECRET_VALUE_CHARSET_RE = re.compile(r"[A-Za-z0-9_\-./+=]+")
+_SECRET_ENV_NAME_RE = re.compile(r"[A-Z0-9_]+")
+# ... and is NOT one of these placeholder / code shapes (matched case-insensitively
+# as a prefix). These are exactly the false positives a real note vault produces:
+# ``process.env.X``, ``import.meta.env.X``, ``z.string()``, ``${VAR}``, ``<PLACEHOLDER>``,
+# ``your-api-key``, ``test_...``, ``sk-...`` and friends.
+_SECRET_VALUE_DENY_PREFIXES = (
+    "process.", "import.", "os.environ", "env.", "z.", "${", "<",
+    "your", "test_", "example", "xxx", "placeholder", "changeme",
+    "dummy", "redacted", "sk-...",
+)
+_SECRET_VALUE_MIN_LEN = 20
+_SECRET_VALUE_MIN_DIGITS = 3
+
+
+def _value_looks_like_credential(raw: str) -> bool:
+    """True if `raw` (the token after a credential keyword and ``:``/``=``) looks
+    like an actual assigned secret rather than a placeholder or a snippet of code.
+
+    Strip one layer of surrounding quotes/backticks, then require: 20+ characters,
+    all from ``[A-Za-z0-9_-./+=]``, at least 3 digits, not starting with any known
+    placeholder/code prefix, and not an all-uppercase ``ENV_VAR_NAME``. This is what
+    turns ``apiKey: process.env.X`` and ``api_key: "your-api-key"`` from false
+    positives into passes while still catching a pasted opaque key."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] in "\"'`" and value[-1] == value[0]:
+        value = value[1:-1]
+    if len(value) < _SECRET_VALUE_MIN_LEN:
+        return False
+    if not _SECRET_VALUE_CHARSET_RE.fullmatch(value):
+        return False
+    if sum(c.isdigit() for c in value) < _SECRET_VALUE_MIN_DIGITS:
+        return False
+    low = value.lower()
+    if any(low.startswith(prefix) for prefix in _SECRET_VALUE_DENY_PREFIXES):
+        return False
+    # an all-uppercase name with underscores is an env-var NAME, not a value
+    if ("_" in value and value == value.upper() and any(c.isalpha() for c in value)
+            and _SECRET_ENV_NAME_RE.fullmatch(value)):
+        return False
+    return True
+
+
+def looks_like_secret(text: str) -> bool:
+    """True if `text` contains what looks like a real ASSIGNED credential.
+
+    Two ways to trip it: (1) a well-known key shape (Google ``AIza…``, OpenAI
+    ``sk-…``, GitHub ``ghp_…``, Slack ``xox[abp]-…``, AWS ``AKIA…``) anywhere in the
+    text, regardless of any label; or (2) a credential keyword
+    (api key / secret / password / token) followed by ``:``/``=`` and a value that
+    passes _value_looks_like_credential (20+ opaque chars with digits, not a
+    placeholder or code reference). A heuristic, deliberately narrow: prose that
+    mentions "token budget" or "password policy", and code samples like
+    ``apiKey: process.env.X`` or ``ApiKey: z.string()``, carry no real value and do
+    not match (ADR-0014's second-layer guard, tightened for the vault's false
+    positives)."""
+    for rx in _WELL_KNOWN_SECRET_RES:
+        if rx.search(text):
+            return True
+    for m in _SECRET_KEYWORD_RE.finditer(text):
+        if _value_looks_like_credential(m.group(1)):
+            return True
+    return False
+
+
+# --- wikilinks: parse + resolve (pure, index-time — ADR-0014) --------------
+# Obsidian `[[wikilinks]]` are the vault's own link graph. Parsed at index time,
+# resolved to the rel_source() paths the store already keys on, and stored on every
+# chunk's metadata so the `hybrid+links` ablation can expand a query along them.
+# Forms handled: [[Target]], [[Target|Alias]], [[Target#Heading]], [[Path/To/Note]],
+# [[../Relative]] — the alias and heading are discarded, only the target survives.
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
+
+
+def parse_wikilinks(text: str) -> list[str]:
+    """Every wikilink TARGET in `text`, stripped of its alias and heading, deduped
+    in first-seen order. Templater placeholders (a target containing ``<%``) and
+    empty targets are dropped — they are template scaffolding, not real links."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in _WIKILINK_RE.finditer(text):
+        target = m.group(1).strip()
+        if not target or "<%" in target:
+            continue
+        if target not in seen:
+            seen.add(target)
+            out.append(target)
+    return out
+
+
+def build_title_index(rel_sources: list[str]) -> dict[str, list[str]]:
+    """Map each note STEM (basename without ``.md``) to the rel paths that share it,
+    each list sorted by ``(len(path), path)`` — Obsidian's shortest-path rule for
+    resolving a bare ``[[Title]]`` when several notes share a filename."""
+    titles: dict[str, list[str]] = {}
+    for rel in rel_sources:
+        stem = posixpath.basename(rel)
+        if stem.endswith(".md"):
+            stem = stem[:-3]
+        titles.setdefault(stem, []).append(rel)
+    for paths in titles.values():
+        paths.sort(key=lambda p: (len(p), p))
+    return titles
+
+
+def resolve_link(target: str, from_source: str, known: set[str],
+                 titles: dict[str, list[str]]) -> str | None:
+    """Resolve a wikilink `target` (as written in the note at `from_source`) to a
+    rel_source path in `known`, or None. Tries, in order: note-relative (handles
+    ``../Index`` and ``Planning/Foo``), root-relative (``01-PROJECTS/x/Index``), then
+    a bare-title match via `titles` (shortest path wins). Never returns a path
+    outside `known`."""
+    t = target.strip()
+    if t.endswith(".md"):
+        t = t[:-3]
+    relative = posixpath.normpath(
+        posixpath.join(posixpath.dirname(from_source), t)
+    ) + ".md"
+    if relative in known:
+        return relative
+    root_relative = t + ".md"
+    if root_relative in known:
+        return root_relative
+    by_title = titles.get(posixpath.basename(t), [None])[0]
+    if by_title is not None and by_title in known:
+        return by_title
+    return None
+
+
 def build_index():
     import chromadb
 
-    files = sorted(
-        glob.glob(str(DOCS_DIR / "*.md"))
-        + glob.glob(str(DOCS_DIR / "*.txt"))
-        + glob.glob(str(DOCS_DIR / "*.pdf"))
-    )
+    patterns = load_ignore_patterns(DOCS_DIR)
+    files = discover_files(DOCS_DIR, patterns)
     if not files:
         sys.exit(f"No docs found in {DOCS_DIR}. Add .md/.txt/.pdf files and retry.")
 
@@ -142,11 +417,20 @@ def build_index():
         pass
     col = client.create_collection(collection_name)  # default LOCAL embeddings
 
+    # Resolve the vault's own wikilink graph against the full set of discovered
+    # sources (ADR-0014). `known` is every discoverable rel path — even ones later
+    # skipped for a secret — so a link's target resolves by identity, not by whether
+    # it happened to be indexed; `titles` backs the bare-title shortest-path rule.
+    known = {rel_source(DOCS_DIR, path) for path in files}
+    titles = build_title_index(sorted(known))
+
     ids, docs, metas = [], [], []
     skipped = 0
+    secret_skipped = 0
+    unresolved = 0
     for path in files:
-        name = os.path.basename(path)
-        text = _read_document(path)
+        name = rel_source(DOCS_DIR, pathlib.Path(path))
+        text = _read_document(str(path))
         if not text.strip():
             # Honest-ingest guard: pypdf has no OCR, so a scanned/image-only PDF
             # extracts to "". Silently indexing nothing would be a telemetry lie
@@ -154,14 +438,41 @@ def build_index():
             print(f"WARN: no extractable text in {name} — skipping (scanned PDF? no OCR)")
             skipped += 1
             continue
+        if looks_like_secret(text):
+            # Credential guard: never copy a pasted key into the vector store,
+            # where retrieval could surface it into a prompt.
+            print(f"WARN: credential-like pattern in {name} — skipping (secrets are never indexed)")
+            secret_skipped += 1
+            continue
+        # resolve this note's wikilinks once; store the same links on every chunk
+        # (Chroma metadata is scalar-only, so the list is comma-joined).
+        links: list[str] = []
+        seen_links: set[str] = set()
+        for target in parse_wikilinks(text):
+            dest = resolve_link(target, name, known, titles)
+            if dest is None:
+                unresolved += 1
+                continue
+            if dest not in seen_links:
+                seen_links.add(dest)
+                links.append(dest)
+        links_meta = ",".join(links)
+        title = posixpath.basename(name)
+        if title.endswith(".md"):
+            title = title[:-3]
         for j, ch in enumerate(chunk(text)):
             ids.append(f"{name}:{j}")
             docs.append(ch["text"])
-            metas.append({"source": name, "chunk": j, "section": ch["section"]})
+            metas.append({"source": name, "chunk": j, "section": ch["section"],
+                          "links": links_meta, "title": title})
     col.add(ids=ids, documents=docs, metadatas=metas)
-    summary = f"Indexed {len(docs)} chunks from {len(files) - skipped} files -> {CHROMA_DIR}"
-    if skipped:
-        summary += f" ({skipped} skipped: no extractable text)"
+    indexed = len(files) - skipped - secret_skipped
+    summary = (
+        f"Indexed {len(docs)} chunks from {indexed} files -> {CHROMA_DIR}"
+        f" ({skipped} skipped: no extractable text; "
+        f"{secret_skipped} skipped: credential pattern"
+        f"; {unresolved} wikilinks unresolved)"
+    )
     print(summary)
 
 
@@ -211,6 +522,79 @@ def reciprocal_rank_fusion(rankings: list[list], k: int = RRF_K) -> list:
     return sorted(scores, key=lambda key: (-scores[key], best_rank[key], first_seen[key]))
 
 
+def fuse_rankings(dense_ids: list, bm25_ids: list, mode: str = "hybrid",
+                  link_ids: list | None = None) -> list:
+    """Combine a dense and a BM25 ranking of the same chunk ids under `mode`
+    (ADR-0014's ablation seam). ``"hybrid"`` fuses both with RRF (the default,
+    identical to ADR-0007's behaviour); ``"dense"`` and ``"bm25"`` bypass fusion
+    and return that single ranking unchanged. ``"hybrid+links"`` fuses the dense,
+    BM25 AND `link_ids` rankings with RRF (the RRF-seeded expansion ADR-0014 chose);
+    with no `link_ids` it is identical to ``"hybrid"``, which is the invariant the
+    slice guarantees when a corpus carries no resolved links. An unknown mode raises
+    ValueError naming the supported MODES — one place decides how a mode maps to a
+    ranking so retrieve() and the eval stay in lockstep."""
+    if mode == "hybrid":
+        return reciprocal_rank_fusion([dense_ids, bm25_ids])
+    if mode == "dense":
+        return list(dense_ids)
+    if mode == "bm25":
+        return list(bm25_ids)
+    if mode == "hybrid+links":
+        if link_ids:
+            return reciprocal_rank_fusion([dense_ids, bm25_ids, link_ids])
+        return reciprocal_rank_fusion([dense_ids, bm25_ids])
+    if mode == "hybrid+rerank":
+        # the base ranking a reranker reorders is plain hybrid fusion; the reorder
+        # itself lives in retrieve()/_apply_rerank, not here (fusion stays pure).
+        return reciprocal_rank_fusion([dense_ids, bm25_ids])
+    raise ValueError(f"unknown retrieval mode {mode!r}; expected one of {MODES}")
+
+
+LINK_TOP_N = 3            # how many top fused NOTES seed the one-hop link expansion
+
+
+def expand_with_links(fused_ids: list[str], id_source: dict[str, str],
+                      source_links: dict[str, list[str]],
+                      source_first_chunk: dict[str, str],
+                      top_n: int = LINK_TOP_N) -> list[str]:
+    """Build the "link ranking" for ``hybrid+links`` (ADR-0014): take the first
+    `top_n` DISTINCT sources in `fused` order (the seed notes), collect their
+    wikilink targets in order — deduped, and excluding the seed sources themselves —
+    and map each target to a chunk id. If any chunk of a target's source is already
+    in `fused_ids`, use the earliest such chunk (so the expansion re-ranks a chunk
+    the query already found rather than introducing a new one); otherwise fall back
+    to `source_first_chunk[target]`; otherwise skip it. Returns the ordered chunk
+    ids; an empty list when the seed notes carry no resolvable links (the invariant
+    that makes ``hybrid+links`` collapse to ``hybrid``). Pure."""
+    seed_sources: list[str] = []
+    for cid in fused_ids:
+        src = id_source.get(cid)
+        if src is None or src in seed_sources:
+            continue
+        seed_sources.append(src)
+        if len(seed_sources) >= top_n:
+            break
+    seed_set = set(seed_sources)
+
+    targets: list[str] = []
+    seen_targets: set[str] = set()
+    for src in seed_sources:
+        for target in source_links.get(src, []):
+            if target in seed_set or target in seen_targets:
+                continue
+            seen_targets.add(target)
+            targets.append(target)
+
+    link_ids: list[str] = []
+    for target in targets:
+        chosen = next((cid for cid in fused_ids if id_source.get(cid) == target), None)
+        if chosen is None:
+            chosen = source_first_chunk.get(target)
+        if chosen is not None:
+            link_ids.append(chosen)
+    return link_ids
+
+
 def hit_at_k(retrieved_sources: list[str], expected, k: int) -> bool:
     """True iff any expected source is among the first k retrieved sources
     (best-first; duplicates counted as positions). `expected` is a str or a list
@@ -219,13 +603,262 @@ def hit_at_k(retrieved_sources: list[str], expected, k: int) -> bool:
     return any(src in wanted for src in retrieved_sources[:k])
 
 
+def rank_of_expected(retrieved_sources: list[str], expected) -> int | None:
+    """The 1-based position of the FIRST retrieved source that is an expected one
+    (`expected` a str or list of str), or None if none appears. Where hit_at_k is
+    a yes/no at a cutoff, this is the depth signal behind it: rank 1 is a clean
+    win, rank 5 with k=4 is precision headroom (ADR-0007's reranker trigger)."""
+    wanted = {expected} if isinstance(expected, str) else set(expected)
+    for i, src in enumerate(retrieved_sources, start=1):
+        if src in wanted:
+            return i
+    return None
+
+
+def classify(rank: int | None, k: int) -> str:
+    """Bucket a rank against the hit@k cutoff: None -> "absent", 1 -> "hit@1",
+    2..k -> "hit@k", beyond k -> "near-miss" (found, but a reranker would have to
+    lift it into the top-k)."""
+    if rank is None:
+        return "absent"
+    if rank == 1:
+        return "hit@1"
+    if rank <= k:
+        return "hit@k"
+    return "near-miss"
+
+
+def rank_histogram(ranks: list[int | None], k: int, depth: int) -> dict[str, int]:
+    """Distribution of expected-source ranks over four buckets — ``"@1"``,
+    ``f"@2-{k}"``, ``f"@{k+1}-{depth}"``, ``"absent"`` — whose counts always sum
+    to ``len(ranks)``. A rank of None (or beyond `depth`) counts as absent."""
+    hist = {"@1": 0, f"@2-{k}": 0, f"@{k+1}-{depth}": 0, "absent": 0}
+    for r in ranks:
+        if r is None:
+            hist["absent"] += 1
+        elif r == 1:
+            hist["@1"] += 1
+        elif r <= k:
+            hist[f"@2-{k}"] += 1
+        elif r <= depth:
+            hist[f"@{k+1}-{depth}"] += 1
+        else:
+            hist["absent"] += 1
+    return hist
+
+
+def unknown_expected(rows: list[dict], known_sources: set[str]) -> list[str]:
+    """Expected sources named in `rows` that are NOT in `known_sources` (the index),
+    deduped and kept in first-seen order. A golden row can only be scored against a
+    source the index actually holds; anything here is a typo or a stale path, worth
+    flagging before the numbers are trusted."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        expected = row.get("expected_source") or row.get("expected_sources")
+        if not expected:
+            continue
+        items = [expected] if isinstance(expected, str) else list(expected)
+        for item in items:
+            if item not in known_sources and item not in seen:
+                seen.add(item)
+                out.append(item)
+    return out
+
+
+def _known_sources() -> set[str]:
+    """Every ``source`` recorded in the active collection's metadata — the set the
+    golden expected-sources are validated against. Touches Chroma, so tests
+    monkeypatch it; returns an empty set if the collection is missing."""
+    import chromadb
+
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    try:
+        col = client.get_collection(active_collection())
+    except Exception:
+        return set()
+    metas = col.get(include=["metadatas"]).get("metadatas") or []
+    return {m["source"] for m in metas if m and "source" in m}
+
+
+# --- reranking (ADR-0007's deferred trigger, fired by the vault near-miss) --
+# `hybrid+rerank` reorders the top RERANK_N fused candidates by a relevance score.
+# Every scorer shares the signature (question, texts) -> list[float] (higher = more
+# relevant) and imports its backend LAZILY, inside the function — never at module
+# import — so the offline pytest gate never pulls torch/onnx/typesafe. The default
+# backend is the LOCAL cross-encoder ($0, measured); TypeSafe is metered, opt-in,
+# and labelled `estimated` (ADR-0004 / ADR-0014). The reorder itself is a pure
+# function, testable with a fake scorer and no Chroma.
+_RERANK_MODEL = None                # cached loaded local model (cross-encoder | flashrank)
+_TYPESAFE_CALLS = 0                 # metered TypeSafe call counter the eval reads (ADR-0004)
+
+
+def rerank_candidates(candidate_ids: list[str], scores: list[float]) -> list[str]:
+    """Reorder `candidate_ids` by `scores` DESCENDING, stably: equal scores keep
+    their input order (Python's sort is stable, so ties fall back to the original
+    index). A length mismatch is a caller bug, not a silent truncation -> ValueError.
+    Pure — this is the reorder `hybrid+rerank` applies to its candidate window."""
+    if len(candidate_ids) != len(scores):
+        raise ValueError(
+            f"rerank_candidates: {len(candidate_ids)} ids but {len(scores)} scores")
+    order = sorted(range(len(candidate_ids)), key=lambda i: -scores[i])
+    return [candidate_ids[i] for i in order]
+
+
+def _scorer_cross_encoder(question: str, texts: list[str]) -> list[float]:
+    """LOCAL, $0 relevance via a sentence-transformers CrossEncoder
+    (`cross-encoder/ms-marco-MiniLM-L-6-v2`) — the reranker ADR-0007 named. A
+    cross-encoder scores a (query, passage) pair jointly, so it separates the
+    paraphrase near-misses a bi-encoder blurs. The model loads once and is cached
+    module-side; offline after the first load. One score per text."""
+    global _RERANK_MODEL
+    if not texts:
+        return []
+    if _RERANK_MODEL is None:
+        from sentence_transformers import CrossEncoder
+        _RERANK_MODEL = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    scores = _RERANK_MODEL.predict([(question, t) for t in texts])
+    return [float(s) for s in scores]
+
+
+def _scorer_flashrank(question: str, texts: list[str]) -> list[float]:
+    """LOCAL, $0 relevance via flashrank (`ms-marco-MiniLM-L-12-v2`, ONNX Runtime,
+    NO torch) — the Python-3.14 fallback for when torch ships no wheel. Same
+    ms-marco cross-encoder family as `_scorer_cross_encoder`, served through ONNX.
+    Cached module-side; one score per text. (Unverified on this machine: torch
+    HAS a 3.14 wheel here, so `cross-encoder` is what installs and is the default;
+    this path is kept for a torch-less environment.)"""
+    global _RERANK_MODEL
+    if not texts:
+        return []
+    if _RERANK_MODEL is None:
+        from flashrank import Ranker
+        _RERANK_MODEL = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
+    from flashrank import RerankRequest
+
+    passages = [{"id": i, "text": t} for i, t in enumerate(texts)]
+    ranked = _RERANK_MODEL.rerank(RerankRequest(query=question, passages=passages))
+    scores = [0.0] * len(texts)
+    for r in ranked:
+        scores[int(r["id"])] = float(r["score"])
+    return scores
+
+
+def _scorer_typesafe(question: str, texts: list[str]) -> list[float]:
+    """METERED relevance via TypeSafe System One (Jev): one Noul per
+    (question, passage) pair asking whether the passage answers the question, and
+    returning a CALIBRATED probability in [0,1]. Requires TYPESAFE_API_KEY (else a
+    plain sys.exit); pairs run concurrently on a small thread pool. Every pair is
+    counted in the module-level `_TYPESAFE_CALLS` the eval reads, and the run is
+    labelled `estimated` (ADR-0004: metered, not $0).
+
+    The call shape follows the TypeSafe Python SDK docs
+    (`client.system_one(state=..., questions={...})`, `response.nouls[key].noul`,
+    verified against https://docs.typesafe.ai/sdk/python.md); the rerank cookbook
+    shows the same value under `response.answers[key].noul`, so if the accessor
+    ever changes this is the one line to revisit."""
+    global _TYPESAFE_CALLS
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        sys.exit("INTERCHANGE_RERANK=typesafe needs TYPESAFE_API_KEY — TypeSafe is "
+                 "metered (see .env.example). Unset it to use the local $0 reranker.")
+    if not texts:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+
+    from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient
+
+    relevance = Noul(
+        instructions="Does the passage contain the information needed to answer the question?",
+        criteria=NoulCriteria(
+            true="The passage states the fact, definition, or procedure the question asks for.",
+            false="The passage is off-topic or only tangentially related; it does not answer the question.",
+        ),
+    )
+
+    def score_one(text: str) -> float:
+        with TypeSafeClient() as client:
+            resp = client.system_one(
+                state={"question": question, "passage": text},
+                questions={"answers": relevance},
+            )
+        return float(resp.nouls["answers"].noul)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        scores = list(pool.map(score_one, texts))
+    _TYPESAFE_CALLS += len(texts)      # one metered call per (question, passage) pair
+    return scores
+
+
+# Register only the backends whose scorer is defined. INTERCHANGE_RERANK picks one;
+# the local names are $0/measured, `typesafe` is metered/estimated.
+RERANKERS = {
+    "cross-encoder": _scorer_cross_encoder,
+    "flashrank": _scorer_flashrank,
+    "typesafe": _scorer_typesafe,
+}
+
+
+def _resolve_reranker():
+    """The (backend name, scorer) selected by INTERCHANGE_RERANK. An unknown name
+    is a plain sys.exit naming the registered backends; the backend's heavy import
+    is deferred to the scorer, so this stays cheap and offline-safe."""
+    backend = RERANK_BACKEND
+    scorer = RERANKERS.get(backend)
+    if scorer is None:
+        sys.exit(f"unknown INTERCHANGE_RERANK={backend!r}; "
+                 f"expected one of {sorted(RERANKERS)}")
+    return backend, scorer
+
+
+def reranker_import_error() -> str | None:
+    """None if the selected rerank backend's module imports (so `hybrid+rerank`
+    can run), else a short reason. Used only by `--mode all` to skip the row
+    cleanly when the optional backend is absent — never called from the gate, and
+    it imports the heavy module only when the CLI asks."""
+    backend = RERANK_BACKEND
+    if backend not in RERANKERS:
+        return f"unknown backend {backend!r}"
+    try:
+        if backend == "cross-encoder":
+            import sentence_transformers  # noqa: F401
+        elif backend == "flashrank":
+            import flashrank  # noqa: F401
+        elif backend == "typesafe":
+            import typesafe_sdk  # noqa: F401
+    except ImportError as e:
+        return f"{backend} not installed ({e.name}) — pip install -r requirements-rerank.txt"
+    return None
+
+
+def _apply_rerank(question: str, fused_ids: list[str], by_id: dict,
+                  scorer, rerank_n: int, top_k: int) -> list[str]:
+    """Reorder the top `rerank_n` fused candidate ids by `scorer` relevance and
+    return the top `top_k` ids. The pure seam `retrieve()`'s `hybrid+rerank`
+    branch calls, so the reorder is testable with a fake scorer and no Chroma:
+    `by_id` maps a chunk id to its `(doc, meta)`, the scorer sees each candidate's
+    TEXT (never its id), and ids missing from `by_id` are dropped before scoring."""
+    window = [cid for cid in fused_ids[:rerank_n] if cid in by_id]
+    scores = scorer(question, [by_id[cid][0] for cid in window])
+    reordered = rerank_candidates(window, scores)
+    return reordered[:top_k]
+
+
 # --- retrieve + generate --------------------------------------------------
-def retrieve(question: str) -> list[tuple[str, dict]]:
+def retrieve(question: str, *, mode: str = "hybrid", top_k: int = TOP_K,
+             pool: int = DENSE_POOL, rerank_n: int = RERANK_N) -> list[tuple[str, dict]]:
     """Hybrid retrieval (ADR-0007): fuse a dense ranking (Chroma local
     embeddings) with a BM25 lexical ranking over the same chunks, via RRF, and
-    return the top-TOP_K (doc, meta) pairs. This is the single seam — both the
+    return the top-`top_k` (doc, meta) pairs. This is the single seam — both the
     RAG path (`answer`) and the agent's `search_docs` tool call it, so both get
     hybrid for free.
+
+    `mode` selects the ablation (ADR-0014): ``"hybrid"`` (RRF, the default and
+    the production behaviour), ``"dense"`` or ``"bm25"`` (that single ranking,
+    fusion bypassed), and ``"hybrid+rerank"`` (hybrid fusion, then the top
+    `rerank_n` candidates reordered by the INTERCHANGE_RERANK backend's relevance
+    scorer). `top_k`, `pool` and `rerank_n` are keyword-only with today's defaults,
+    so every positional caller (answer_detail, the agent tool, MCP) and every test
+    monkeypatch is untouched; `--eval` widens them to measure rank and near-miss.
 
     BM25 catches exact EDI codes (824, 997, ISA) that dense embeddings blur;
     dense catches paraphrases BM25 misses. The BM25 index is rebuilt per query
@@ -240,15 +873,15 @@ def retrieve(question: str) -> list[tuple[str, dict]]:
         sys.exit("No index yet. Run:  uv run interchange.py --reindex")
 
     with obs.span("retrieve", **{"openinference.span.kind": "RETRIEVER",
-                                 "input.value": question}):
+                                 "input.value": question, "mode": mode}):
         everything = col.get(include=["documents", "metadatas"])
         ids, docs, metas = everything["ids"], everything["documents"], everything["metadatas"]
         if not ids:
             return []
         by_id = {i: (d, m) for i, d, m in zip(ids, docs, metas)}
 
-        # dense ranking over a candidate pool (wider than TOP_K so fusion has signal)
-        pool = min(len(ids), max(TOP_K * 5, 20))
+        # dense ranking over a candidate pool (wider than top_k so fusion has signal)
+        pool = min(len(ids), max(pool, top_k))
         with obs.span("retrieve.dense", **{"pool": pool}):
             dense_ids = col.query(query_texts=[question], n_results=pool)["ids"][0]
 
@@ -256,9 +889,48 @@ def retrieve(question: str) -> list[tuple[str, dict]]:
         with obs.span("retrieve.bm25"):
             bm25_ids = [ids[i] for i in bm25_rank(question, docs)]
 
-        with obs.span("retrieve.rrf"):
-            fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
-        return [by_id[i] for i in fused[:TOP_K] if i in by_id]
+        # hybrid+rerank: fuse to plain hybrid, then reorder the top `rerank_n`
+        # candidates by the selected relevance scorer and take top_k (ADR-0007's
+        # deferred reranker, fired by the vault near-miss). The backend imports
+        # lazily inside the scorer; a missing one is a plain, actionable exit.
+        if mode == "hybrid+rerank":
+            fused = fuse_rankings(dense_ids, bm25_ids, "hybrid")
+            backend, scorer = _resolve_reranker()
+            window = min(rerank_n, len(fused))
+            with obs.span("retrieve.rerank", **{"backend": backend, "window": window}):
+                try:
+                    reordered = _apply_rerank(question, fused, by_id, scorer,
+                                              rerank_n, top_k)
+                except ImportError:
+                    sys.exit(f"rerank backend {backend!r} is not installed. "
+                             f"Run: pip install -r requirements-rerank.txt")
+            return [by_id[i] for i in reordered if i in by_id]
+
+        # hybrid+links: seed with the plain hybrid fusion, expand along the wikilink
+        # graph stored in metadata, and re-fuse the neighbours as a third ranking
+        # (ADR-0014). With no resolved links this collapses to hybrid, verifiably.
+        link_ids = None
+        if mode == "hybrid+links":
+            id_source = {i: m["source"] for i, m in zip(ids, metas)}
+            source_links: dict[str, list[str]] = {}
+            source_first_chunk: dict[str, str] = {}
+            best_chunk: dict[str, int] = {}
+            for i, m in zip(ids, metas):
+                src = m["source"]
+                if src not in source_links:
+                    source_links[src] = [t for t in (m.get("links") or "").split(",") if t]
+                ch_idx = m.get("chunk", 0)
+                if src not in best_chunk or ch_idx < best_chunk[src]:
+                    best_chunk[src] = ch_idx
+                    source_first_chunk[src] = i
+            seed = fuse_rankings(dense_ids, bm25_ids, "hybrid")
+            link_ids = expand_with_links(seed, id_source, source_links, source_first_chunk)
+            with obs.span("retrieve.links", **{"candidates": len(link_ids)}):
+                pass
+
+        with obs.span("retrieve.rrf", **{"mode": mode}):
+            fused = fuse_rankings(dense_ids, bm25_ids, mode, link_ids=link_ids)
+        return [by_id[i] for i in fused[:top_k] if i in by_id]
 
 
 # Engines return a dict: text, in/out tokens, cost (API-equivalent when known,
@@ -480,38 +1152,121 @@ def answer(question: str, engine: str = "api", explain: bool = False) -> str:
 
 
 # --- evaluation (offline, $0) ---------------------------------------------
-def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K) -> dict:
-    """Offline retrieval eval (ADR-0007): for each golden {question,
-    expected_source}, run the hybrid retrieve() and score hit@k. Prints a
-    per-question table + aggregate and returns {"n","hits","hit_at_k","k"}.
+def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None = None,
+             mode: str = "hybrid", depth: int = EVAL_DEPTH, pool: int = DENSE_POOL,
+             rerank_n: int = RERANK_N,
+             log_path: pathlib.Path = EVAL_LOG, quiet: bool = False) -> dict:
+    """Offline retrieval eval (ADR-0007/0014): for each golden {question,
+    expected_source}, run retrieve() under `mode` to `depth`, and record hit@k,
+    the *rank* of the expected source, its class, a rank histogram, and the
+    near-miss count (found within `depth` but outside `k`) — ADR-0007's reranker
+    trigger, expressed as a number instead of a claim.
 
-    Runs on local embeddings + BM25 ($0). The point is honesty: a retrieval
-    change is *measured* against this set, not asserted. Grow the golden set as
-    the corpus grows."""
+    Rows with no expected source (the unanswerable ADR-0008 rows) are SKIPPED and
+    counted; they belong to the answer-quality grade (--grade), not retrieval.
+    `collection` reads a named corpus for this run only (contextvar, reset in a
+    finally — the answer_detail pattern) leaving the module default untouched.
+    Each run appends one JSON line to `log_path`. Runs on local embeddings + BM25
+    ($0); a retrieval change is *measured* against this set, not asserted."""
     import json as _json
+    import time as _time
 
-    golden_path = pathlib.Path(golden_path)
-    if not golden_path.exists():
-        sys.exit(f"No golden set at {golden_path}. See eval/README.md.")
-    rows = [_json.loads(line) for line in golden_path.read_text().splitlines() if line.strip()]
-    if not rows:
-        sys.exit(f"Golden set {golden_path} is empty.")
+    token = _ACTIVE_COLLECTION.set(collection) if collection else None
+    try:
+        golden_path = pathlib.Path(golden_path)
+        if not golden_path.exists():
+            sys.exit(f"No golden set at {golden_path}. See eval/README.md.")
+        rows = [_json.loads(line) for line in golden_path.read_text().splitlines() if line.strip()]
+        if not rows:
+            sys.exit(f"Golden set {golden_path} is empty.")
 
-    hits = 0
-    print(f"Retrieval eval — hit@{k} over {len(rows)} golden question(s)\n")
-    print(f"  {'':<3} {'expected':<20} question")
-    print(f"  {'-' * 3} {'-' * 20} {'-' * 44}")
-    for row in rows:
-        question = row["question"]
-        expected = row.get("expected_source") or row.get("expected_sources")
-        sources = [m["source"] for _, m in retrieve(question)]
-        ok = hit_at_k(sources, expected, k)
-        hits += ok
-        exp_str = expected if isinstance(expected, str) else ",".join(expected)
-        print(f"  {'✅' if ok else '❌':<3} {exp_str:<20} {question[:44]}")
-    rate = hits / len(rows)
-    print(f"\n  hit@{k} = {hits}/{len(rows)} = {rate:.1%}")
-    return {"n": len(rows), "hits": hits, "hit_at_k": rate, "k": k}
+        # An unanswerable row (ADR-0008) has no expected source — skip and count it.
+        scored = [r for r in rows if (r.get("expected_source") or r.get("expected_sources"))]
+        skipped = len(rows) - len(scored)
+
+        # Warn once, before scoring, about expected sources the index does not hold.
+        unknowns = unknown_expected(scored, _known_sources())
+        if unknowns and not quiet:
+            print(f"WARN: {len(unknowns)} expected source(s) not in the index — "
+                  f"scored as absent: {', '.join(unknowns)}\n")
+
+        corpus = active_collection()
+        if not quiet:
+            print(f"Retrieval eval — mode={mode} hit@{k} over {len(scored)} answerable "
+                  f"question(s) (corpus={corpus}, depth={depth}, pool={pool})\n")
+            print(f"  {'':<3} {'rank':<5} question")
+            print(f"  {'-' * 3} {'-' * 5} {'-' * 44}")
+
+        calls_before = _TYPESAFE_CALLS
+        ranks: list[int | None] = []
+        results: list[dict] = []
+        hits = 0
+        for row in scored:
+            question = row["question"]
+            expected = row.get("expected_source") or row.get("expected_sources")
+            kind = row.get("kind")
+            # only the rerank mode reads rerank_n; keep the call shape identical to
+            # slice-4 for every other mode so existing retrieve fakes are untouched.
+            extra = {"rerank_n": rerank_n} if mode == "hybrid+rerank" else {}
+            sources = [m["source"] for _, m in retrieve(question, mode=mode, top_k=depth,
+                                                         pool=pool, **extra)]
+            hit = hit_at_k(sources, expected, k)
+            rank = rank_of_expected(sources, expected)
+            cls = classify(rank, k)
+            hits += hit
+            ranks.append(rank)
+            results.append({"question": question, "kind": kind, "expected": expected,
+                            "rank": rank, "class": cls, "retrieved": sources[:depth]})
+            if not quiet:
+                mark = "✅" if hit else "❌"
+                rank_str = str(rank) if rank is not None else "-"
+                kind_str = f"[{kind}] " if kind else ""
+                print(f"  {mark:<3} {rank_str:<5} {kind_str}{question[:44]}")
+
+        n = len(scored)
+        rate = hits / n if n else 0.0
+        hit_at_1 = sum(1 for r in ranks if r == 1)
+        histogram = rank_histogram(ranks, k, depth)
+        near_miss = sum(1 for r in ranks if r is not None and k < r <= depth)
+        absent = histogram["absent"]
+
+        # rerank metadata: present only when this run reranked (else null). Local
+        # backends are `measured` ($0); TypeSafe is `estimated` (ADR-0004). `calls`
+        # counts the metered TypeSafe pairs this run made — 0 for the local backends.
+        rerank_meta = None
+        if mode == "hybrid+rerank":
+            rerank_meta = {
+                "backend": RERANK_BACKEND,
+                "window": rerank_n,
+                "calls": _TYPESAFE_CALLS - calls_before,
+                "telemetry": "estimated" if RERANK_BACKEND == "typesafe" else "measured",
+            }
+
+        result = {
+            "n": n, "hits": hits, "hit_at_k": rate, "k": k,
+            "hit_at_1": hit_at_1, "histogram": histogram, "near_miss": near_miss,
+            "absent": absent, "mode": mode, "corpus": corpus, "golden": str(golden_path),
+            "depth": depth, "pool": pool, "rerank": rerank_meta,
+            "skipped": skipped, "results": results,
+        }
+
+        log_path = pathlib.Path(log_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps({**result, "ts": _time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+
+        if not quiet:
+            print(f"\n  hit@1 = {hit_at_1}/{n}")
+            print(f"  hit@{k} = {hits}/{n} = {rate:.1%}")
+            print(f"  rank histogram: {histogram}")
+            print(f"  near-miss (expected within top-{depth} but outside top-{k}) = {near_miss}"
+                  f"  <- ADR-0007 reranker trigger (build the reranker when this is > 0)")
+            print(f"  skipped (no expected source — unanswerable, see --grade) = {skipped}")
+            print(f"  -> {log_path}")
+        return result
+    finally:
+        if token is not None:
+            _ACTIVE_COLLECTION.reset(token)
 
 
 # --- cli ------------------------------------------------------------------
@@ -521,10 +1276,26 @@ def main():
     ap.add_argument("--ask", metavar="Q", help="ask one question and exit")
     ap.add_argument("--audit", action="store_true", help="show governance/cost summary and exit")
     ap.add_argument("--eval", action="store_true",
-                    help="run the offline retrieval eval (hit@k over eval/golden.jsonl) and exit; "
-                         "measures the hybrid retriever, $0 (ADR-0007)")
+                    help="run the offline retrieval eval (hit@k + rank + near-miss over a golden "
+                         "set) and exit; measures the retriever, $0 (ADR-0007/0014)")
     ap.add_argument("--k", type=int, default=TOP_K, metavar="N",
                     help=f"hit@k cutoff for --eval (default {TOP_K})")
+    ap.add_argument("--golden", default=GOLDEN_PATH, metavar="PATH",
+                    help="golden set for --eval (default eval/golden.jsonl)")
+    ap.add_argument("--corpus", default=None, metavar="NAME",
+                    help="Chroma collection --eval reads (default: the module collection); "
+                         "the override is scoped to the run and never mutates module state")
+    ap.add_argument("--mode", choices=list(MODES) + ["all"], default="hybrid",
+                    help="retrieval mode for --eval: hybrid (RRF, default), dense, bm25, or "
+                         "'all' to run each and print a comparison table (ADR-0014)")
+    ap.add_argument("--depth", type=int, default=EVAL_DEPTH, metavar="N",
+                    help=f"how deep --eval looks for the expected source, for rank + near-miss "
+                         f"(default {EVAL_DEPTH})")
+    ap.add_argument("--pool", type=int, default=DENSE_POOL, metavar="N",
+                    help=f"dense candidate-pool size fed to fusion in --eval (default {DENSE_POOL})")
+    ap.add_argument("--rerank-n", type=int, default=RERANK_N, metavar="N",
+                    help=f"fused-candidate window the hybrid+rerank mode reorders "
+                         f"(default {RERANK_N}); backend from INTERCHANGE_RERANK")
     ap.add_argument("--grade", action="store_true",
                     help="run the answer-quality eval (refusal- + answer-correctness, "
                          "faithfulness monitor) over eval/golden.jsonl and exit; advisory, "
@@ -558,7 +1329,42 @@ def main():
         return
 
     if args.eval:
-        run_eval(k=args.k)
+        if args.mode == "all":
+            # include hybrid+rerank only if its backend imports; else skip it with
+            # one honest line and run the rest (its optional deps are not in the gate).
+            modes = list(MODES)
+            skip_reason = None
+            if "hybrid+rerank" in modes:
+                skip_reason = reranker_import_error()
+                if skip_reason is not None:
+                    modes.remove("hybrid+rerank")
+            summaries = {
+                m: run_eval(golden_path=args.golden, k=args.k, collection=args.corpus,
+                            mode=m, depth=args.depth, pool=args.pool,
+                            rerank_n=args.rerank_n, quiet=True)
+                for m in modes
+            }
+            n = next(iter(summaries.values()))["n"]
+            print(f"Retrieval eval — mode comparison over {n} answerable question(s) "
+                  f"(k={args.k}, depth={args.depth}, pool={args.pool})\n")
+            hk = f"hit@{args.k}"
+            print(f"  {'mode':<14} {'hit@1':>9} {hk:>9} {'near-miss':>11} {'absent':>9}")
+            print(f"  {'-' * 14} {'-' * 9} {'-' * 9} {'-' * 11} {'-' * 9}")
+            for m in modes:
+                s = summaries[m]
+                h1 = f"{s['hit_at_1']}/{s['n']}"
+                hk_col = f"{s['hits']}/{s['n']}"
+                print(f"  {m:<14} {h1:>9} {hk_col:>9} {s['near_miss']:>11} {s['absent']:>9}")
+            if "hybrid+rerank" in modes:
+                label = "estimated" if RERANK_BACKEND == "typesafe" else "measured"
+                print(f"\n  rerank backend: {RERANK_BACKEND} "
+                      f"(window {args.rerank_n}, telemetry {label})")
+            elif skip_reason is not None:
+                print(f"\n  hybrid+rerank skipped: {skip_reason}")
+        else:
+            run_eval(golden_path=args.golden, k=args.k, collection=args.corpus,
+                     mode=args.mode, depth=args.depth, pool=args.pool,
+                     rerank_n=args.rerank_n)
         return
 
     if args.grade:
