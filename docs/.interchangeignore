@@ -3,3 +3,4 @@
 # adr/ is this repo's own decision record — project meta, not EDI/rail domain
 # knowledge. Indexing it would pollute the corpus and the golden eval set.
 adr/
+workbench-RESULT.md
