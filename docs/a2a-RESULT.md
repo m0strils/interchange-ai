@@ -1,6 +1,6 @@
 # A2A Goal A acceptance result
 
-_Gate: `INTERCHANGE_ENGINE=claude-code scripts/a2a-accept.sh` on branch feat/a2a-demo at 1544fd0, run 2026-09-21 21:33. Criteria: learning/a2a-acceptance-criteria.md (private). P1 ran on the Claude subscription; the demos ran on the stub engine at $0._
+_Gate: `INTERCHANGE_ENGINE=claude-code scripts/a2a-accept.sh` on branch feat/a2a-demo at 3973085, run 2026-09-21 21:34 on a clean tree, exit code 0. Criteria: learning/a2a-acceptance-criteria.md (private). P1 ran on the Claude subscription; the demos ran on the stub engine at $0._
 
 ```
 == Preconditions
@@ -43,11 +43,10 @@ PASS  AC9.h profiles rail and hotel
 == Hygiene
 PASS  AC10a only public keys tracked
 PASS  AC10b no .env / audit.jsonl tracked
-FAIL  AC10c uncommitted changes
+PASS  AC10c working tree clean
 PASS  AC11a no removed tests or scenarios
 PASS  AC11b no skip/xfail added
 PASS  AC12  SDK import still unshadowed
 
-A2A ACCEPTANCE: FAILED
-exit=0
+A2A ACCEPTANCE: ALL PASS
 ```
