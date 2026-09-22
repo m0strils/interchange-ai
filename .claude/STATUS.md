@@ -1,8 +1,8 @@
 # Status (reprinted after compaction)
 
-Goal: Goal A of the A2A demonstration (learning/a2a-acceptance-criteria.md), branch feat/a2a-demo.
-Gate: scripts/a2a-accept.sh, run as `INTERCHANGE_ENGINE=claude-code scripts/a2a-accept.sh` so P1 costs $0.
-Done so far (2026-09-21): P2, P3, P4 satisfied; app.py, answer_detail, stub engine, caller audit field, corpus override committed; content files (hotel-demo, profiles, orchestrate yaml, agent tiers, ADR-0013, lesson 07, README section) committed.
-Current: Goal A complete 2026-09-21 (docs/a2a-RESULT.md). Next: Goal B by hand after the Render deploy (Orchestrate registration, site widget, /demo page), per learning/a2a-acceptance-criteria.md.
-Last AC passed: AC12 — all of P1-P4, AC1-AC12 PASS on a clean tree.
-Rules: never edit the gate, eval/baseline.json, or existing tests; commit after each AC with the AC number.
+Goal: ship the browser workbench (ADR-0015) to `dev` with a real-engine acceptance gate.
+Gate: `make workbench-accept` (5 claude -p calls on the subscription, $0 marginal); `WB_ENGINE=stub make workbench-accept` self-tests at $0. Offline gate: `.venv/bin/python -m pytest -q` (pre-push hook).
+Done (2026-09-22): workbench shipped (bb47f16); gate + fail-fast engine + audited busy + clean timeout (6081d8e); real run ALL PASS captured in docs/workbench-RESULT.md.
+Current: merge feature/browser-workbench → dev (--no-ff), push dev. No main merge, no public deploy (go-public decision pending).
+Follow-ups (ADR-0015): TRUSTED_PROXY rate-limit keying before any proxied deploy; JS test runner; token streaming via on_event; --agent path in the UI. Add scripts/workbench-accept.sh + scripts/workbench_accept.py to PROTECTED in .claude/hooks/protect-paths.sh by hand.
+Rules: never edit the gates, eval/golden.jsonl, or weaken existing tests; commit per slice with the ADR number.

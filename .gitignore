@@ -17,3 +17,7 @@ __pycache__/
 
 # pytest
 .pytest_cache/
+
+# acceptance run log + scratch drafts (ADR-0015 gate)
+eval/workbench-accept-runs.jsonl
+eval/*.DRAFT-NOTES.md

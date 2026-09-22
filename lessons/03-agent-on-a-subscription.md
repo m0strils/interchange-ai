@@ -57,12 +57,13 @@ Two production details worth noticing:
 | | API loop (Lesson 02) | Subscription agent (this lesson) |
 |---|---|---|
 | Cost | metered per call | **$0 marginal** (your subscription) |
-| Telemetry | **exact** tokens/cost | *estimated* tokens, `$0` recorded |
+| Telemetry | **exact** tokens/cost | **measured** tokens + a shadow cost, `$0` marginal (ADR-0004) |
 | Loop | hand-rolled, fully visible | Claude Code's, driven via MCP |
 | Auth | API key | your Claude login |
 
-The audit log still records every run — it just records *estimated* tokens and
-`$0` cost for this engine, matching the existing `--engine claude-code` RAG path.
+The audit log still records every run — it records **measured** tokens and a
+shadow cost with `$0` marginal for this engine (ADR-0004), matching the existing
+`--engine claude-code` RAG path.
 That honesty (an estimate labeled as an estimate) is itself the lesson: **know
 which of your numbers are measured and which are inferred.**
 

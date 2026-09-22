@@ -16,15 +16,25 @@ python interchange.py --agent --explain --ask "…"   # agentic loop on your Cla
 python interchange.py --audit                       # governance / cost dashboard
 python -m pytest -q                                 # the test gate (offline, free)
 uvicorn app:app                                     # HTTP: /health, /ask, signed A2A card + /a2a (ADR-0013)
+INTERCHANGE_ENGINE=stub python -m uvicorn app:app   # browser workbench at /ui + POST /ask/stream (SSE) + GET /options (ADR-0015); $0 stub
+# ^ prefer `python -m uvicorn`; the `.venv/bin/uvicorn` shim can carry a stale shebang.
+#   Policy env vars for the web surface: see .env.example ("Browser workbench + HTTP policy tier").
 make a2a-demo PROFILE=hotel                         # two-agent A2A demo, $0 on the stub engine (rail|hotel)
 scripts/a2a-accept.sh                               # A2A Goal A acceptance gate (run with INTERCHANGE_ENGINE=claude-code)
+make workbench-accept                               # real-engine acceptance gate (ADR-0015): 5 claude -p calls on the subscription, $0 marginal; WB_ENGINE=stub self-tests at $0
 make reindex PROFILE=vault                          # index the read-only Obsidian vault corpus (ADR-0014)
 make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the vault golden set (ADR-0014)
 # ^ export INTERCHANGE_VAULT_DIR before both — DOCS_DIR resolves at import, before .env loads (ADR-0014)
 ```
 
-**Status:** ADR-0014 shipped — the vault corpus (188 notes, 4,614 chunks) is
-ingested read-only and its retrieval ablations are **measured** (`eval/eval-runs.jsonl`):
+**Status:** ADR-0015 shipped — a same-origin **browser workbench** at `/ui` over the
+same governed pipeline: scored retrieval (`retrieve_detail`, honest score labels), a
+policy tier (`policy.py`: env is policy, request is preference, policy wins), pins as
+HMAC capability tokens, a ledger-enforced metered budget, a per-host rate limit +
+generation semaphore, and `POST /ask/stream` (SSE, `fetch`/`ReadableStream`). The CLI
+is untouched; the JS is verified in-browser, not by the pytest gate (a noted gap).
+Before it, ADR-0014 shipped — the vault corpus (188 notes, 4,614 chunks) is ingested
+read-only and its retrieval ablations are **measured** (`eval/eval-runs.jsonl`):
 ADR-0007's reranker trigger fired and paid off (hit@1 11→15/18, local cross-encoder, $0),
 while naive link-aware expansion regressed and stays deferred.
 

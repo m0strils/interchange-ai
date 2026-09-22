@@ -33,7 +33,7 @@ import mcp_server
 from a2a.utils.signing import create_agent_card_signer
 from a2a_agent import requester
 from a2a_agent.profiles import load_profile
-from tests.conftest import last_audit_row
+from tests.conftest import fake_retrieval, last_audit_row
 
 scenarios("a2a_handoff.feature")
 
@@ -85,11 +85,14 @@ def ephemeral_keys(context, monkeypatch):
 
 @given(parsers.parse('the knowledge base returns a passage from "{source}"'))
 def kb_returns_passage(context, monkeypatch, source):
-    def fake_retrieve(question):
+    def fake_retrieve(question, **kwargs):
         context.setdefault("collections_seen", []).append(interchange.active_collection())
-        return [("An 824 reports application errors.", {"source": source, "chunk": 0})]
+        return fake_retrieval(
+            {"source": source, "text": "An 824 reports application errors.", "chunk": 0},
+            corpus=interchange.active_collection(),
+        )
 
-    monkeypatch.setattr(interchange, "retrieve", fake_retrieve)
+    monkeypatch.setattr(interchange, "retrieve_detail", fake_retrieve)
     context["source"] = source
 
 
@@ -273,10 +276,10 @@ def test_mcp_and_a2a_audit_rows_have_identical_keys(monkeypatch, isolated_audit_
     monkeypatch.setenv("INTERCHANGE_ENGINE", "stub")
     monkeypatch.setattr(
         interchange,
-        "retrieve",
-        lambda q: [
-            ("An 824 reports application errors.", {"source": "x12-overview.md", "chunk": 0})
-        ],
+        "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": "x12-overview.md",
+             "text": "An 824 reports application errors.", "chunk": 0}),
     )
     private_pem, public_pem = keys.generate_keypair()
     monkeypatch.setenv("A2A_SIGNING_KEY_PEM", private_pem)

@@ -17,6 +17,8 @@ import pathlib
 import shutil
 import subprocess
 
+import pytest
+
 import agent_sub
 import interchange
 
@@ -83,6 +85,25 @@ def test_agent_sub_headless_runs_outside_the_repo(monkeypatch):
     agent_sub.answer_agentic_sub("what is a 214?")
 
     _assert_outside_repo(recorded["cwd"])
+
+
+def test_claude_code_timeout_is_a_clean_exit(monkeypatch):
+    """A `claude -p` timeout must exit cleanly with a scrubbed message — never let
+    `str(TimeoutExpired)` leak the prompt (context + question) into the log."""
+    def _raise_timeout(*a, **k):
+        raise subprocess.TimeoutExpired(
+            cmd=["claude", "-p", "SECRET PROMPT TEXT"], timeout=180,
+        )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+
+    with pytest.raises(SystemExit) as excinfo:
+        interchange._generate_claude_code("SECRET PROMPT TEXT")
+
+    msg = str(excinfo.value)
+    assert "timed out" in msg
+    assert "180" in msg
+    assert "SECRET PROMPT TEXT" not in msg
 
 
 def test_headless_call_restricts_setting_sources(monkeypatch):

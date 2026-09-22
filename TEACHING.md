@@ -44,6 +44,14 @@ don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard))
   serving both the current A2A 1.0 interface and a 0.3 compat interface so an
   enterprise orchestration platform can register the agent today; mapped to
   OWASP Agentic ASI01/ASI03/ASI07.
+- **[Lesson 08 — A browser workbench that shows its scores honestly](lessons/08-browser-workbench.md)** —
+  add a same-origin `/ui` over the same guarded pipeline: scored evidence with honest
+  labels (why a bar for an unbounded logit lies and a rank slopegraph is honest), a
+  streamed stage timeline, a policy-vs-preference tier, pins as HMAC capability tokens
+  (why `pin=id` was a read-any-chunk oracle), and a metered budget read from the audit
+  ledger; two bugs worth teaching — contextvars across threads and `+` in a query
+  string; mapped to OWASP LLM01/output-handling/excessive-agency/RAG-poisoning and
+  NIST AI RMF GOVERN/MEASURE.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
@@ -54,12 +62,12 @@ grows, in roadmap order.
 
 | # | Dimension | What you'll learn to build | Lesson |
 |---|---|---|---|
-| 1 | **Security** | input/output guardrails, prompt-injection defense (OWASP LLM01), instruction/data separation | ✅ [01](lessons/01-mvp.md) |
-| 2 | **Governance & Compliance** | per-request audit log (who asked what, which sources, cost), NIST AI RMF GOVERN | ✅ [01](lessons/01-mvp.md) |
+| 1 | **Security** | input/output guardrails, prompt-injection defense (OWASP LLM01), instruction/data separation; a web policy tier + capability-token pins on a new surface | ✅ [01](lessons/01-mvp.md) [08](lessons/08-browser-workbench.md) |
+| 2 | **Governance & Compliance** | per-request audit log (who asked what, which sources, cost), NIST AI RMF GOVERN; policy-vs-preference tiers + a ledger-enforced budget | ✅ [01](lessons/01-mvp.md) [08](lessons/08-browser-workbench.md) |
 | 3 | **Evaluation & Quality Gates** | golden dataset + faithfulness/groundedness gate (RAGAS) as a CI check | ◐ [04](lessons/04-hybrid-retrieval.md) (retrieval hit@k) + ADR-0008 (`--grade`: refusal-/answer-correctness + faithfulness monitor, advisory; CI gate pending) |
-| 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ◐ ADR-0009 (opt-in OpenTelemetry tracing of RAG + agent to a local Phoenix; audit cost/latency in 01) |
-| 5 | **Reliability & Architecture** | retries, timeouts, circuit breakers, fallback routing, graceful "I don't know" | ⬜ coming (graceful refusal in 01) |
-| 6 | **Cost & Efficiency** | model routing (cheap model for easy turns), caching, token budgets | ⬜ coming (per-request cost + engine routing in 01) |
+| 4 | **Observability** | tracing every LLM/tool call (Phoenix/Langfuse), cost & latency dashboards, drift | ◐ ADR-0009 (opt-in OpenTelemetry tracing of RAG + agent to a local Phoenix; audit cost/latency in 01) + [08](lessons/08-browser-workbench.md) (per-stage timings streamed to the UI) |
+| 5 | **Reliability & Architecture** | retries, timeouts, circuit breakers, fallback routing, graceful "I don't know" | ◐ [08](lessons/08-browser-workbench.md) (per-host rate limit + generation semaphore + graceful 429/503 on the web surface; graceful refusal in 01; retries/fallback still coming) |
+| 6 | **Cost & Efficiency** | model routing (cheap model for easy turns), caching, token budgets | ◐ [08](lessons/08-browser-workbench.md) (metered reranking off by default + a daily budget from the ledger; per-request cost + engine routing in 01; caching still coming) |
 | 7 | **Deployment & Ops** | IaC, CI/CD, secrets management, AWS Bedrock keeping data in-VPC | ⬜ coming |
 | 8 | **Context & Memory Engineering** | agentic retrieval (plan → retrieve → reason → "enough context?"), retrieval-vs-long-context routing, agentic memory — the 2026 headline skill | ◐ [02](lessons/02-agentic-loop.md) [03](lessons/03-agent-on-a-subscription.md) [04](lessons/04-hybrid-retrieval.md) (agentic retrieval + hybrid seam; router/multi-hop deferred) |
 

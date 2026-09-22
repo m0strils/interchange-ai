@@ -1,0 +1,545 @@
+/* ============================================================================
+   Interchange workbench — styles
+   One design system across the portfolio: tokens are inherited verbatim from
+   site/index.html, with two deliberate changes for this surface:
+     - light --muted #767B77 -> #6A6F6B  (AA for the numerals it carries; also
+       applied back in site/index.html)
+     - color-scheme: light dark          (native controls follow the theme)
+   Marks are --graphite; --built is reserved for status (grounded) and the
+   selected-row rule. No shadows, no gradients, hairline rules, 2-3px radii.
+   ============================================================================ */
+
+:root{
+  color-scheme: light dark;
+
+  --paper:#F7F8F6;
+  --panel:#FFFFFF;
+  --ink:#171A18;
+  --graphite:#494E4B;
+  --muted:#6A6F6B;          /* was #767B77 — raised to AA (>= 4.6:1 on paper) */
+  --line:#E4E7E2;
+  --line-2:#D3D7D1;
+  --built:#2E7A4E;          /* the only hue — status + selected rule */
+  --partial:#9AA09B;
+  --road:#C7CCC6;
+  --focus:#2E7A4E;
+
+  --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,Cambria,'Times New Roman',serif;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,Consolas,'Liberation Mono',monospace;
+  --measure:66ch;
+  --pad:clamp(1.15rem,4.5vw,2.5rem);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#14171A; --panel:#191D20; --ink:#ECEFEC; --graphite:#B7BEB9;
+    --muted:#828A84; --line:#262B29; --line-2:#333935;
+    --built:#48A776; --partial:#6C736E; --road:#3B423D; --focus:#48A776;
+  }
+}
+:root[data-theme="light"]{
+  --paper:#F7F8F6; --panel:#FFFFFF; --ink:#171A18; --graphite:#494E4B; --muted:#6A6F6B;
+  --line:#E4E7E2; --line-2:#D3D7D1; --built:#2E7A4E; --partial:#9AA09B; --road:#C7CCC6; --focus:#2E7A4E;
+}
+:root[data-theme="dark"]{
+  --paper:#14171A; --panel:#191D20; --ink:#ECEFEC; --graphite:#B7BEB9; --muted:#828A84;
+  --line:#262B29; --line-2:#333935; --built:#48A776; --partial:#6C736E; --road:#3B423D; --focus:#48A776;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--graphite);
+  font-family:var(--sans); font-size:16px; line-height:1.55;
+  font-variant-numeric:tabular-nums; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{color:var(--ink); margin:0; text-wrap:balance; font-weight:600}
+button{font:inherit; color:inherit; cursor:pointer}
+a{color:var(--ink)}
+:where(a,button,input,select,[tabindex]):focus-visible{
+  outline:2px solid var(--focus); outline-offset:3px; border-radius:2px;
+}
+::selection{background:var(--built); color:#fff}
+
+/* ---- shell ---------------------------------------------------------------- */
+.wrap{max-width:1120px; margin-inline:auto; padding-inline:var(--pad)}
+
+header.bar{border-bottom:1px solid var(--line); background:var(--panel)}
+header.bar .wrap{
+  display:flex; align-items:center; gap:1rem 1.4rem; flex-wrap:wrap;
+  padding-block:.85rem;
+}
+.bar .brand{font-family:var(--serif); font-size:1.12rem; color:var(--ink); letter-spacing:-.01em}
+.bar .spacer{flex:1}
+.bar .field{display:flex; align-items:center; gap:.45rem; font-size:.86rem; color:var(--muted)}
+.bar .field select{
+  font:inherit; color:var(--ink); background:var(--panel);
+  border:1px solid var(--line-2); border-radius:2px; padding:.28rem 1.6rem .28rem .5rem;
+}
+.bar .stat b{color:var(--ink); font-weight:600}
+.bar .toggle{
+  background:none; border:1px solid var(--line-2); color:var(--muted);
+  padding:.32rem .6rem; border-radius:2px; font-size:.8rem;
+}
+.bar .toggle:hover{color:var(--ink); border-color:var(--ink)}
+
+/* ---- fixture banner ------------------------------------------------------- */
+.fixture-note{
+  color:var(--muted); font-size:.82rem; padding-block:.5rem;
+  border-bottom:1px solid var(--line);
+}
+.fixture-note .wrap{display:flex; align-items:center; gap:.5rem}
+.fixture-note .mark{
+  width:.5rem; height:.5rem; border-radius:50%;
+  background:var(--partial); flex:none;
+}
+
+/* ---- ask (hero) ----------------------------------------------------------- */
+.ask{padding-block:clamp(1.6rem,4vw,2.4rem); border-bottom:1px solid var(--line)}
+.ask label.q{display:block; color:var(--muted); font-size:.9rem; margin-bottom:.6rem}
+.ask .field-row{display:flex; gap:.7rem; align-items:stretch; flex-wrap:wrap}
+.ask .qbox{
+  flex:1 1 22rem; min-width:0;
+  font-family:var(--serif); font-size:clamp(1.35rem,3.2vw,1.9rem); line-height:1.2;
+  color:var(--ink); background:var(--panel);
+  border:1px solid var(--line-2); border-radius:3px; padding:.7rem .85rem;
+}
+.ask .qbox::placeholder{color:var(--muted)}
+.btn{
+  border:1px solid var(--line-2); background:var(--panel); color:var(--ink);
+  border-radius:3px; padding:.6rem 1.15rem; font-size:.95rem;
+}
+.btn:hover{border-color:var(--built); color:var(--built)}
+.btn-primary{background:var(--ink); color:var(--paper); border-color:var(--ink)}
+.btn-primary:hover{background:var(--built); border-color:var(--built); color:#fff}
+.btn:disabled{opacity:.5; cursor:not-allowed}
+
+.options{display:flex; flex-wrap:wrap; gap:1rem 1.5rem; align-items:center; margin-top:1.1rem; font-size:.9rem}
+.options .grp{display:flex; align-items:center; gap:.5rem; color:var(--muted)}
+.options select,.options input[type=number]{
+  font:inherit; color:var(--ink); background:var(--panel);
+  border:1px solid var(--line-2); border-radius:2px; padding:.25rem .45rem;
+}
+.options input[type=number]{width:3.4rem}
+.options fieldset{border:0; margin:0; padding:0; display:flex; align-items:center; gap:.7rem}
+.options fieldset legend{float:left; color:var(--muted); margin-right:.6rem}
+.options .radio{display:flex; align-items:center; gap:.35rem; color:var(--graphite)}
+.options .radio input{margin:0}
+.options .radio.disabled{color:var(--muted)}
+.variant-chips{display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.9rem}
+.chip{
+  font-size:.82rem; color:var(--graphite);
+  border:1px solid var(--line-2); border-radius:2px; padding:.32rem .7rem; background:var(--panel);
+}
+.chip:hover{border-color:var(--ink); color:var(--ink)}
+
+/* ---- run tabs ------------------------------------------------------------- */
+.runs{display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; padding-block:.9rem; border-bottom:1px solid var(--line)}
+.runs .lbl{color:var(--muted); font-size:.86rem; margin-right:.2rem}
+.run-tab{
+  border:1px solid var(--line-2); border-radius:2px; background:var(--panel);
+  padding:.34rem .7rem; font-size:.84rem; color:var(--graphite); display:flex; gap:.5rem; align-items:baseline;
+}
+.run-tab[aria-current="true"]{border-color:var(--ink); color:var(--ink)}
+.run-tab .n{font-variant-numeric:tabular-nums}
+.run-tab .ms{color:var(--muted)}
+
+/* ---- main grid ------------------------------------------------------------ */
+.work{display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:0; align-items:start}
+.work > *{padding-block:1.4rem}
+.work .left{padding-inline-end:1.6rem; border-inline-end:1px solid var(--line)}
+.work .right{padding-inline-start:1.6rem}
+@media (max-width:860px){
+  .work{grid-template-columns:1fr}
+  .work .left{border-inline-end:0; padding-inline-end:0}
+  .work .right{padding-inline-start:0; border-top:1px solid var(--line)}
+}
+
+.h-sm{font-size:.95rem; color:var(--ink); margin-bottom:.7rem; display:flex; align-items:baseline; gap:.6rem}
+.h-sm .count{color:var(--muted); font-weight:400; font-size:.86rem}
+
+/* ---- timing ledger -------------------------------------------------------- */
+.ledger{list-style:none; margin:0 0 1.6rem; padding:0; display:grid; gap:.5rem}
+.ledger li{display:grid; grid-template-columns:6.2rem 4.4rem 1fr; align-items:center; gap:.6rem}
+.ledger .stage{color:var(--ink); font-size:.9rem}
+.ledger .val{font-variant-numeric:tabular-nums; font-size:.86rem; color:var(--graphite); text-align:right}
+.ledger .val.running{color:var(--built)}
+.ledger .val.none{color:var(--muted)}
+.ledger .track{display:block; height:8px; background:var(--line-2); border:1px solid var(--partial); border-radius:2px; overflow:hidden}
+.ledger .bar{display:block; height:100%; background:var(--graphite); border-radius:1px}
+.ledger .hint{grid-column:1 / -1; color:var(--muted); font-size:.78rem; margin-top:-.2rem}
+
+/* ---- evidence table ------------------------------------------------------- */
+.evidence-scroll{overflow-x:auto; border:1px solid var(--line); border-radius:3px}
+table.evidence{border-collapse:collapse; width:100%; font-size:.86rem}
+table.evidence caption{
+  text-align:left; color:var(--muted); font-size:.82rem; padding:.6rem .75rem;
+  border-bottom:1px solid var(--line);
+}
+table.evidence th{color:var(--muted); font-weight:600; text-align:left; vertical-align:bottom}
+table.evidence th, table.evidence td{padding:.5rem .6rem; border-bottom:1px solid var(--line); vertical-align:top}
+table.evidence tbody tr:last-child td{border-bottom:0}
+table.evidence th.rank, table.evidence td.rank{text-align:right; font-variant-numeric:tabular-nums; color:var(--ink); width:2.2rem}
+table.evidence .use{width:2.6rem; text-align:center}
+table.evidence .use input{width:18px; height:18px}
+table.evidence .use label{display:inline-flex; padding:.15rem; cursor:pointer}
+.passage-cell .id{font-family:var(--mono); font-size:.78rem; color:var(--graphite); word-break:break-all}
+.passage-cell .sec{color:var(--ink); margin-top:.15rem}
+.passage-cell .read{
+  margin-top:.4rem; font-size:.78rem; padding:.22rem .55rem;
+  border:1px solid var(--line-2); border-radius:2px; background:var(--panel); color:var(--graphite);
+}
+.passage-cell .read:hover{border-color:var(--ink); color:var(--ink)}
+.passage-cell .cited{
+  display:inline-block; margin-top:.35rem; font-size:.74rem; color:var(--built);
+}
+
+/* raw score stack — numbers are never muted (review row 8) */
+.scores{display:grid; gap:.12rem; font-variant-numeric:tabular-nums}
+.scores .s{display:grid; grid-template-columns:3.1rem auto; gap:.4rem; white-space:nowrap}
+.scores .s .lab{color:var(--muted); font-size:.76rem}
+.scores .s .num{color:var(--graphite); font-size:.82rem}
+.scores .s .num.absent{color:var(--muted)}
+
+tr.is-selected td{background:color-mix(in srgb,var(--built) 8%,transparent)}
+tr.is-selected td.rank{box-shadow:inset 2px 0 0 var(--built)}
+
+/* selection summary + re-ask */
+.select-bar{display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-top:1rem; font-size:.86rem}
+.select-bar .summary{color:var(--muted)}
+.select-bar .clear{border:0; background:none; color:var(--graphite); text-decoration:underline; padding:0}
+.select-bar .clear:hover{color:var(--ink)}
+
+/* ---- slopegraph ----------------------------------------------------------- */
+.slope{display:block}
+.slope svg{display:block}
+.slope .axis-labels{display:flex; justify-content:space-between; width:118px; margin-top:.15rem; color:var(--muted); font-size:.68rem}
+th .slope-head{display:flex; justify-content:space-between; width:118px; color:var(--muted); font-size:.68rem; font-weight:400; margin-top:.25rem}
+.slope line, .slope polyline{stroke:var(--graphite); fill:none}
+.slope circle{fill:var(--graphite)}
+.slope .gap-label{fill:var(--muted); font-size:9px}
+
+/* ---- answer pane ---------------------------------------------------------- */
+.answer{border:1px solid var(--line); border-radius:3px; background:var(--panel); padding:1.1rem 1.2rem; margin-bottom:1.2rem}
+.answer .ahead{display:flex; flex-direction:column; gap:.12rem; margin-bottom:.5rem}
+.answer .ahead h3{font-family:var(--serif); font-size:1.12rem}
+.status{display:inline-flex; align-items:flex-start; gap:.45rem; font-size:.84rem; margin-top:.35rem}
+.status.grounded{color:var(--built)}
+.status.ungrounded{color:var(--ink)}
+.status .glyph{font-weight:700; line-height:1.3}
+.status .st-lines{display:flex; flex-direction:column; line-height:1.25}
+.status .st-sub{color:var(--muted); font-size:.78rem; font-weight:400}
+.answer .prose{font-family:var(--serif); font-size:1.06rem; line-height:1.6; color:var(--ink); max-width:var(--measure)}
+.answer .prose .cite{
+  font-family:var(--mono); font-size:.82rem; color:var(--built);
+  border:1px solid color-mix(in srgb,var(--built) 40%,var(--line-2)); border-radius:2px;
+  padding:0 .3rem; white-space:nowrap;
+}
+.answer .meta{display:flex; flex-wrap:wrap; gap:.4rem 1.1rem; margin-top:.9rem; color:var(--muted); font-size:.8rem}
+.answer .meta b{color:var(--graphite); font-weight:600; font-variant-numeric:tabular-nums}
+.answer .ids{margin-top:.5rem; font-family:var(--mono); font-size:.74rem; color:var(--muted)}
+.answer .ids b{color:var(--graphite); font-weight:600}
+.answer .actions{margin-top:.9rem; display:flex; gap:.6rem; flex-wrap:wrap}
+
+/* ---- passage reader ------------------------------------------------------- */
+.passage{border:1px solid var(--line); border-left:3px solid var(--built); border-radius:3px; background:var(--panel); padding:1rem 1.15rem}
+.passage:focus-visible{outline:2px solid var(--focus); outline-offset:2px}
+.passage .ptop{display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; margin-bottom:.5rem}
+.passage .pid{font-family:var(--mono); font-size:.78rem; color:var(--graphite)}
+.passage .psec{color:var(--ink); font-size:.95rem}
+.passage .close{border:0; background:none; color:var(--muted); font-size:.9rem; padding:.1rem .3rem}
+.passage .close:hover{color:var(--ink)}
+.passage .ptext{color:var(--graphite); font-size:.94rem; line-height:1.6; max-width:var(--measure)}
+.passage .empty{color:var(--muted); font-size:.9rem}
+
+/* ---- scoring legend ------------------------------------------------------- */
+.legend-block{margin-top:1.6rem}
+.legend-block summary{color:var(--ink); font-size:.9rem; cursor:pointer}
+.legend-block dl{margin:.7rem 0 0; display:grid; gap:.55rem}
+.legend-block dt{color:var(--graphite); font-size:.82rem; font-weight:600}
+.legend-block dt .kind{font-family:var(--mono); font-size:.72rem; color:var(--muted); font-weight:400; margin-left:.4rem}
+.legend-block dd{margin:.1rem 0 0; color:var(--muted); font-size:.8rem; max-width:var(--measure)}
+
+/* ---- footer --------------------------------------------------------------- */
+footer.foot{border-top:1px solid var(--line); background:var(--panel)}
+footer.foot .wrap{padding-block:1.4rem; display:flex; flex-wrap:wrap; gap:.6rem 1.4rem; align-items:baseline; font-size:.8rem; color:var(--muted)}
+footer.foot .store{max-width:var(--measure); line-height:1.5}
+footer.foot b{color:var(--graphite); font-weight:600}
+
+/* ---- phone: restack the evidence table to label/value pairs --------------- */
+@media (max-width:600px){
+  table.evidence, table.evidence thead, table.evidence tbody,
+  table.evidence th, table.evidence td, table.evidence tr{display:block}
+  /* the caption must span the full width once the table is block-ified, or it
+     inherits the first column's width and wraps one word per line. */
+  table.evidence caption{display:block; width:100%; box-sizing:border-box}
+  table.evidence thead{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0)}
+  table.evidence tr{border-bottom:1px solid var(--line-2); padding:.5rem .2rem}
+  table.evidence tbody tr:last-child{border-bottom:0}
+  table.evidence td{border:0; padding:.25rem .2rem; display:grid; grid-template-columns:6.5rem 1fr; gap:.6rem}
+  table.evidence td::before{content:attr(data-label); color:var(--muted); font-size:.78rem}
+  table.evidence td.rank{text-align:left}
+  .work .right{margin-top:.4rem}
+}
+
+/* ---- motion: one orchestrated moment; honoured off when reduced ----------- */
+@media (prefers-reduced-motion: no-preference){
+  .ledger .bar{transition:width .5s ease}
+  .slope polyline{stroke-dasharray:220; stroke-dashoffset:0}
+}
+
+/* ============================================================================
+   Slice 3a — every state of the finished workbench. Appended so source order
+   lets these refine the base rules above. Still one system: marks --graphite,
+   --built reserved for grounded status and the selected-row rule, hairlines,
+   2-3px radii, no shadows, no gradients.
+   ============================================================================ */
+
+/* ---- visually-hidden live region ------------------------------------------ */
+.sr-live{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+}
+
+/* ---- header session spend ------------------------------------------------- */
+.bar .spend b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums}
+
+/* ---- fixture banner + state switcher -------------------------------------- */
+.fixture-note .wrap{flex-wrap:wrap; gap:.4rem .8rem}
+.fx-lead b{color:var(--graphite)}
+.fx-switch{display:flex; flex-wrap:wrap; gap:.15rem; margin-inline-start:.2rem}
+.fx-switch a{
+  font-size:.76rem; color:var(--muted); text-decoration:none;
+  padding:.14rem .42rem; border:1px solid transparent; border-radius:2px; line-height:1.3;
+}
+.fx-switch a:hover{color:var(--ink); border-color:var(--line-2)}
+.fx-switch a[aria-current="true"]{color:var(--ink); border-color:var(--line-2); background:var(--paper)}
+
+/* ---- cold start ----------------------------------------------------------- */
+.cold{padding-block:1.6rem 2rem}
+.cold-lead{
+  font-family:var(--serif); font-size:clamp(1.1rem,2.6vw,1.35rem); color:var(--ink);
+  max-width:var(--measure); margin:0 0 1.1rem; line-height:1.35;
+}
+.cold-ex{display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.5rem}
+.cold-note{color:var(--muted); font-size:.85rem; max-width:var(--measure); margin:0 0 1.1rem; line-height:1.5}
+
+/* ---- ask: stop + inline notices ------------------------------------------- */
+.btn-stop{background:var(--panel); color:var(--ink); border-color:var(--ink)}
+.btn-stop:hover{background:var(--paper); border-color:var(--ink); color:var(--ink)}
+.ask-error{color:var(--ink); font-size:.86rem; margin:.75rem 0 0}
+.ask-error b{font-variant-numeric:tabular-nums}
+.ask-hint{color:var(--muted); font-size:.82rem; margin:.6rem 0 0}
+
+/* ---- options: k clamp + jev looks ----------------------------------------- */
+.inline-err{color:var(--ink); font-size:.8rem}
+.options .radio{min-height:24px; padding-block:.15rem}
+.options .radio.jev.disabled{color:var(--muted)}
+.options .radio.jev.disabled input{cursor:not-allowed}
+.jev-note{width:100%; color:var(--muted); font-size:.8rem; margin:.5rem 0 0; max-width:var(--measure); line-height:1.5}
+.jev-confirm{
+  width:100%; max-width:34rem; margin-top:.8rem;
+  border:1px solid var(--line-2); border-left:3px solid var(--built);
+  border-radius:3px; background:var(--panel); padding:.85rem .95rem;
+}
+.jev-confirm p{margin:0 0 .65rem; font-size:.9rem; color:var(--graphite)}
+.jev-confirm b{color:var(--ink); font-variant-numeric:tabular-nums}
+.jc-actions{display:flex; flex-wrap:wrap; gap:.7rem; align-items:center}
+
+/* shared text button */
+.link-btn{
+  border:0; background:none; padding:0; font:inherit; color:var(--graphite);
+  text-decoration:underline; text-underline-offset:2px; cursor:pointer;
+}
+.link-btn:hover{color:var(--ink)}
+
+/* ---- timing: running / failed / not-run / blocked ------------------------- */
+.ledger .val.failed{color:var(--ink); font-weight:600}
+.ledger .val.blocked{color:var(--ink); font-weight:600}
+.ledger li.is-failed .track{opacity:.45}
+.ledger .hint.fail-row{display:flex; align-items:center; gap:.7rem; color:var(--ink)}
+
+/* ---- evidence: pinned tag, empty, absent tooltip -------------------------- */
+.pin-tag{
+  display:inline-block; margin:.35rem .4rem 0 0; font-size:.72rem; color:var(--graphite);
+  border:1px solid var(--line-2); border-radius:2px; padding:.02rem .35rem;
+}
+.ev-empty{color:var(--muted); font-size:.9rem; max-width:var(--measure)}
+.scores .num.absent[data-note]{
+  cursor:help; text-decoration:underline dotted; text-underline-offset:2px; position:relative;
+}
+.scores .num.absent[data-note]:hover::after{
+  content:attr(data-note); position:absolute; left:0; top:135%; z-index:6;
+  background:var(--ink); color:var(--paper); font-weight:400; font-variant-numeric:normal;
+  font-size:.72rem; line-height:1.35; padding:.35rem .5rem; border-radius:2px;
+  width:max-content; max-width:15rem; white-space:normal;
+}
+
+/* ---- Jev probability track (0..1 with a 0.5 tick) ------------------------- */
+.prob{display:inline-flex; align-items:center; gap:.4rem}
+.prob-track{
+  position:relative; width:46px; height:8px; flex:none;
+  background:var(--line-2); border:1px solid var(--partial); border-radius:2px; overflow:hidden;
+}
+.prob-fill{position:absolute; left:0; top:0; height:100%; background:var(--graphite)}
+.prob-tick{position:absolute; left:50%; top:-1px; bottom:-1px; width:1px; background:var(--ink)}
+
+/* ---- slopegraph header buttons + draw-once -------------------------------- */
+th .slope-head{display:flex; justify-content:space-between; width:118px; margin-top:.25rem; gap:.1rem}
+.slope-h-btn{
+  border:0; background:none; color:var(--muted); font-family:var(--mono);
+  font-size:.68rem; font-weight:400; padding:.3rem .25rem; min-height:24px;
+  border-radius:2px; cursor:pointer;
+}
+.slope-h-btn:hover{color:var(--ink); text-decoration:underline}
+@media (prefers-reduced-motion: no-preference){
+  .slope.draw .seg{stroke-dasharray:150; stroke-dashoffset:150; animation:slope-draw .5s ease forwards}
+}
+@keyframes slope-draw{to{stroke-dashoffset:0}}
+
+/* ---- answer: stacked collapsible ------------------------------------------ */
+.answer summary{list-style:none; cursor:pointer; display:block; position:relative; padding-right:1.4rem}
+.answer summary::-webkit-details-marker{display:none}
+.answer summary::marker{content:""}
+.answer summary::after{content:"+"; position:absolute; right:.15rem; top:-.1rem; color:var(--muted); font-size:1.15rem; line-height:1}
+.answer details[open] summary::after{content:"\2013"}
+.answer details[open] summary{margin-bottom:.4rem}
+.answer .ahead{margin-bottom:0}
+.asub{color:var(--muted); font-weight:400; font-size:.92rem; font-family:var(--sans)}
+.answer .ahead .asub{display:block; margin:0}
+.answers{display:grid; gap:1rem}
+.answer-wait{color:var(--muted); font-size:.92rem; max-width:var(--measure); line-height:1.55; margin:.3rem 0 0}
+.answer-wait.is-fail{color:var(--ink)}
+.blocked-panel{
+  border:1px solid var(--line-2); border-left:3px solid var(--partial);
+  border-radius:3px; background:var(--panel); padding:.9rem 1rem; margin-top:.3rem;
+}
+.blocked-panel .bp-lead{margin:0 0 .5rem; color:var(--ink); font-size:.95rem}
+.blocked-panel .bp-reason{margin:0 0 .95rem; color:var(--graphite); font-size:.9rem; max-width:var(--measure)}
+.answer .ids .copy-id{
+  border:0; background:none; font-family:var(--mono); font-size:.74rem; color:var(--graphite);
+  padding:0 .1rem; text-decoration:underline dotted; text-underline-offset:2px; cursor:pointer;
+}
+.answer .ids .copy-id:hover{color:var(--ink)}
+.answer .ids span{margin-right:.9rem}
+
+/* ---- passage: phone sheet ------------------------------------------------- */
+.passage-wrap{display:block}
+.sheet-backdrop{display:none}
+@media (max-width:600px){
+  .passage-wrap:not(.open) .passage{display:none}
+  .passage-wrap.open .sheet-backdrop{display:block; position:fixed; inset:0; background:rgba(20,23,26,.4); z-index:40}
+  .passage-wrap.open .passage{
+    position:fixed; left:0; right:0; bottom:0; z-index:41; max-height:78vh; overflow:auto;
+    border-radius:10px 10px 0 0; border:1px solid var(--line); border-top:3px solid var(--built);
+  }
+}
+
+/* ---- legend: opened-signal highlight -------------------------------------- */
+.legend-block dl > div.hot{
+  background:color-mix(in srgb,var(--ink) 6%,transparent);
+  border-radius:2px; padding:.25rem .35rem; margin:-.25rem -.35rem;
+}
+
+/* ---- footer: "what this page stores" popover ------------------------------ */
+footer.foot .wrap{justify-content:space-between; align-items:center}
+.store-pop{position:relative}
+.store-btn{color:var(--graphite); font-size:.82rem}
+.store-panel{
+  position:absolute; bottom:135%; inset-inline-start:0; z-index:20; width:min(28rem,84vw);
+  background:var(--panel); border:1px solid var(--line-2); border-radius:3px; padding:.9rem 1rem;
+}
+.store-panel p{margin:0 0 .6rem; font-size:.82rem; color:var(--graphite); line-height:1.55}
+.store-panel p:last-child{margin-bottom:0}
+.store-panel .fixture-line{color:var(--muted)}
+.foot-sig{color:var(--muted)}
+
+/* ---- compare view --------------------------------------------------------- */
+.compare{padding-block:1.4rem}
+table.evidence.cmp th.rank{text-align:left; width:8rem}
+table.evidence.cmp td.rank{width:8rem; color:var(--ink); vertical-align:middle}
+.cmp-sub{display:block; font-weight:400; color:var(--muted); font-size:.72rem; margin-top:.15rem}
+.cmp-delta{font-size:.82rem; color:var(--graphite); font-variant-numeric:tabular-nums}
+.cmp-delta .d-up{color:var(--ink); font-weight:600}
+.cmp-delta .d-none{color:var(--muted)}
+.cmp-delta .d-new, .cmp-delta .d-drop{color:var(--ink)}
+.cmp-note{color:var(--muted); font-size:.82rem; margin:1rem 0 0}
+
+/* ---- phone sticky action bar ---------------------------------------------- */
+.stickybar{display:none}
+@media (max-width:600px){
+  .stickybar{
+    display:flex; position:fixed; left:0; right:0; bottom:0; z-index:30;
+    align-items:center; gap:.9rem; padding:.7rem var(--pad);
+    background:var(--panel); border-top:1px solid var(--line-2);
+  }
+  .stickybar .s-count{color:var(--muted); font-size:.82rem}
+  .stickybar .btn-primary{flex:1}
+  .stickybar .s-jump{font-size:.82rem; color:var(--graphite)}
+  footer.foot .wrap{padding-bottom:4.6rem}
+}
+
+/* larger hit target for the row checkbox and View passage button */
+table.evidence .use label{padding:.35rem; min-width:24px; min-height:24px; align-items:center; justify-content:center}
+.passage-cell .read{min-height:24px}
+
+/* form controls follow the one hue rather than the browser's default blue */
+input[type="checkbox"], input[type="radio"]{accent-color:var(--built)}
+
+/* self-critique cut (frontend-design): the fixture banner's decorative dot is
+   gone — it carried no information and only added a pipeline-dot-ish mark. */
+
+/* ---- live: header key field, index stat, unreachable banner (slice 3b) ----- */
+.bar .field.key input{
+  width:11rem; max-width:38vw; font-size:.82rem; padding:.25rem .4rem;
+  border:1px solid var(--line-2); border-radius:2px; background:var(--panel); color:var(--ink);
+}
+.bar .field.idx b{color:var(--ink); font-weight:600}
+.bar .field.idx{color:var(--muted)}
+.server-down{background:color-mix(in srgb,var(--ink) 5%,var(--panel)); border-bottom:1px solid var(--line-2)}
+.server-down .wrap{padding-block:.6rem; color:var(--ink); font-size:.86rem}
+.inline-note{color:var(--muted); font-size:.8rem}
+.ask .qbox:disabled{opacity:.55; cursor:not-allowed}
+.options fieldset:disabled{opacity:.55}
+.chip:disabled{opacity:.5; cursor:not-allowed}
+
+/* ============================================================================
+   Fix pass (browser-workbench UX + a11y). Smallest coherent styling for the
+   interactive citations, the clipboard-fallback field, the Jev env secondary
+   line, the compare side-B select, and the 24px target bumps.
+   ============================================================================ */
+
+/* U4 — citations are buttons now: reset the UA chrome, keep the mark look. */
+.answer .prose button.cite{
+  background:none; cursor:pointer; line-height:inherit; vertical-align:baseline;
+}
+.answer .prose .cite:hover{
+  color:var(--ink); border-color:var(--built);
+}
+
+/* U5 — the evidence row is a Read convenience; hint it (checkbox/button keep theirs). */
+table.evidence tbody tr[id]{cursor:pointer}
+
+/* U11b — clipboard rejection: an inline notice + a selectable field. */
+.copy-wrap{display:inline-flex; flex-direction:column; gap:.3rem; align-items:flex-start}
+.copy-fail{display:flex; flex-direction:column; gap:.2rem; width:100%}
+.copy-fail-msg{color:var(--ink); font-size:.78rem}
+.copy-fallback{
+  font-family:var(--mono); font-size:.74rem; color:var(--graphite);
+  width:min(28rem,80vw); background:var(--panel);
+  border:1px solid var(--line-2); border-radius:2px; padding:.35rem .45rem; resize:vertical;
+}
+
+/* U7 — the env-var remedy sits quietly on a second line, not in the sentence. */
+.jev-env{display:block; margin-top:.25rem; font-family:var(--mono); font-size:.72rem; color:var(--muted)}
+
+/* U2 — "Compare with" side-B select in the runs bar. */
+.runs .cmp-with{display:flex; align-items:center; gap:.4rem; color:var(--muted); font-size:.84rem}
+.runs .cmp-with select{
+  font:inherit; color:var(--ink); background:var(--panel);
+  border:1px solid var(--line-2); border-radius:2px; padding:.28rem 1.4rem .28rem .45rem;
+}
+
+/* A4 — lift two sub-24px targets to >= 24px tall without changing their weight much. */
+.select-bar .clear{padding-block:.25rem}
+footer.foot .link-btn{padding-block:.25rem}

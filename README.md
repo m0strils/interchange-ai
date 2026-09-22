@@ -71,9 +71,35 @@ python interchange.py --engine claude-code --ask "..." # headless Claude Code on
 
 `--engine api` gives exact token/cost telemetry and is the standard production
 pattern. `--engine claude-code` shells out to `claude -p`, billing nothing extra
-if you have a Claude subscription (token counts are estimated; shares your
-subscription's usage limits). The audit log records which engine served each
+if you have a Claude subscription (tokens and an API-equivalent shadow cost are
+measured from the CLI's JSON, ADR-0004; $0 marginal; shares your subscription's
+usage limits). The audit log records which engine served each
 request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
+
+### Browser workbench (`/ui`)
+A same-origin browser surface over the *same* governed pipeline: ask a question,
+see the retrieved evidence ranked with its **real scores** (dense `l2` distance,
+raw BM25, fused RRF, and the reranker score when enabled), watch the pipeline
+stream stage by stage, and read the grounded answer — the CLI's guardrails, audit
+row, and honest telemetry, unchanged ([ADR-0015](docs/adr/0015-browser-workbench-surface.md),
+[Lesson 08](lessons/08-browser-workbench.md)).
+
+```bash
+INTERCHANGE_ENGINE=stub python -m uvicorn app:app   # no API key, no metered call
+# then open http://localhost:8000/ui/
+curl -s localhost:8000/options | python -m json.tool           # the policy document
+curl -sN -X POST localhost:8000/ask/stream \
+  -H 'content-type: application/json' -d '{"q":"what is an 824?"}'   # streamed stages
+```
+
+The workbench reads a **policy tier** (`policy.py`): env is policy, a request is
+preference, policy wins — a disallowed corpus or a locked knob is a 403 with a
+reason, never a silent downgrade. Metered reranking is off by default and budgeted
+from the audit ledger; a per-host rate limit and a generation semaphore bound the
+box; on a public deploy `/ask*` fail closed behind an API key. Policy env vars are
+documented in [`.env.example`](.env.example).
+
+![The Interchange workbench answer panel: "Answer 1, hybrid, 4 passages" marked Grounded, the stub-engine reply citing rail-edi-notes.md, and an engine / cost / telemetry line with request and audit ids above Copy-run-as-JSON and Copy-link controls.](docs/img/workbench.jpg)
 
 ## Architecture (MVP)
 
@@ -92,12 +118,12 @@ user ──input guardrail──> Claude (context = data, not instructions)
 
 | Dimension | Control | Status |
 |---|---|---|
-| Security | input/output guardrails, injection defense, instruction/data separation | ✅ |
-| Governance | per-request audit log w/ cost + grounding; secrets hygiene | ✅ |
+| Security | input/output guardrails, injection defense, instruction/data separation; web policy tier (corpus allow-list, pins as HMAC capability tokens, CSP/nosniff, fail-closed public auth — ADR-0015) | ✅ |
+| Governance | per-request audit log w/ cost + grounding; secrets hygiene; policy vs preference tiers (403 with reason, never a silent downgrade) + a metered daily budget enforced from the ledger (ADR-0015) | ✅ |
 | Evaluation | retrieval hit@k eval (`--eval`); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
-| Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009) | 🟡 |
-| Reliability | graceful refusal over hallucination; retries/fallback routing | 🟡 |
-| Cost | per-request estimate + running total; model routing | 🟡 |
+| Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009); per-stage timings streamed to the workbench UI (ADR-0015) | 🟡 |
+| Reliability | graceful refusal over hallucination; retries/fallback routing; per-host rate limit + generation semaphore with graceful 429/503 on the web surface (ADR-0015) | 🟡 |
+| Cost | per-request estimate + running total; model routing; metered reranking off by default, budgeted daily from the audit ledger (ADR-0015) | 🟡 |
 | Deployment | IaC, CI/CD, AWS Bedrock in-VPC | ⬜ |
 | Context/Memory | agentic retrieval, retrieval/long-context routing, agentic memory | ⬜ |
 

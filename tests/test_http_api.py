@@ -1,7 +1,7 @@
 """Executable acceptance criteria for the HTTP surface (features/http_api.feature).
 
 Same stub seams as the CLI acceptance tests — the fake engine goes into
-``interchange.ENGINES["api"]`` and ``interchange.retrieve`` returns a canned
+``interchange.ENGINES["api"]`` and ``interchange.retrieve_detail`` returns a canned
 passage — so these runs are offline, free and deterministic. The app is driven
 in-process through ``TestClient`` (no server, no socket).
 
@@ -17,7 +17,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 import app as http_app
 import enterprise
 import interchange
-from tests.conftest import last_audit_row
+from tests.conftest import fake_retrieval, last_audit_row
 
 scenarios("http_api.feature")
 
@@ -32,17 +32,23 @@ def client() -> TestClient:
 def fresh_audit_log(context, isolated_audit_log, monkeypatch):
     # the surface reads the engine from the environment; pin it to the stubbed one
     monkeypatch.delenv("INTERCHANGE_ENGINE", raising=False)
+    # the corpus scenario names "rail"; allow it alongside the defaults so the
+    # policy allow-list (ADR-0015) does not refuse this offline REST test
+    monkeypatch.setenv("INTERCHANGE_CORPORA", "edi,hotel,rail")
     context["audit_path"] = isolated_audit_log
 
 
 @given(parsers.parse('the knowledge base returns a passage from "{source}"'))
 def kb_returns_passage(context, monkeypatch, source):
-    def fake_retrieve(question):
+    def fake_retrieve(question, **kwargs):
         # record which collection the pipeline was pointed at for this call
         context["collection"] = interchange.active_collection()
-        return [("An 824 reports application errors.", {"source": source, "chunk": 0})]
+        return fake_retrieval(
+            {"source": source, "text": "An 824 reports application errors.", "chunk": 0},
+            corpus=interchange.active_collection(),
+        )
 
-    monkeypatch.setattr(interchange, "retrieve", fake_retrieve)
+    monkeypatch.setattr(interchange, "retrieve_detail", fake_retrieve)
     context["source"] = source
 
 
@@ -99,11 +105,12 @@ def response_cites(context, source):
     assert source in body["sources"]
 
 
-@then("an audit row was written with no caller")
-def audit_row_no_caller(context):
+@then("an audit row was written with a web caller")
+def audit_row_web_caller(context):
     row = last_audit_row()
     assert row["grounded"] is True
-    assert row["caller"] is None
+    # the web surface records a correlation label (ADR-0015), not None like the CLI
+    assert row["caller"] and row["caller"].startswith("web/")
 
 
 @then("the response reports a blocked reason")
@@ -134,9 +141,10 @@ def test_stub_engine_answers_grounded(monkeypatch):
     """The offline `stub` engine cites the retrieved source, so it passes the
     grounding guardrail without a network or subprocess call."""
     monkeypatch.setattr(
-        interchange, "retrieve",
-        lambda q: [("An 824 reports application errors.",
-                    {"source": "x12-overview.md", "chunk": 0})],
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": "x12-overview.md",
+             "text": "An 824 reports application errors.", "chunk": 0}),
     )
     detail = interchange.answer_detail("what is an 824?", engine="stub")
     assert detail["grounded"] is True
@@ -167,9 +175,10 @@ def test_post_ask_mirrors_get_and_missing_question_is_422(monkeypatch):
     422 from validation — it never reaches the pipeline."""
     monkeypatch.delenv("INTERCHANGE_ENGINE", raising=False)
     monkeypatch.setattr(
-        interchange, "retrieve",
-        lambda q: [("An 824 reports application errors.",
-                    {"source": "x12-overview.md", "chunk": 0})],
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": "x12-overview.md",
+             "text": "An 824 reports application errors.", "chunk": 0}),
     )
     monkeypatch.setitem(interchange.ENGINES, "api", interchange.ENGINES["stub"])
     client = TestClient(http_app.app)
