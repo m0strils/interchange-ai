@@ -1424,6 +1424,9 @@ def parse_claude_usage(stdout: str, est_input_chars: int) -> dict:
             "cost": None, "model": model, "telemetry": "estimated"}
 
 
+CLAUDE_CODE_TIMEOUT_S = 180
+
+
 def _generate_claude_code(user_content: str) -> dict:
     """
     Generation via Claude Code headless (`claude -p`) — runs on a Claude
@@ -1440,12 +1443,17 @@ def _generate_claude_code(user_content: str) -> dict:
 
     if not shutil.which("claude"):
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
-    proc = subprocess.run(
-        ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
-         "--output-format", "json", "--setting-sources", "user"],
-        capture_output=True, text=True, timeout=180,
-        cwd=headless_cwd(),
-    )
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
+             "--output-format", "json", "--setting-sources", "user"],
+            capture_output=True, text=True, timeout=CLAUDE_CODE_TIMEOUT_S,
+            cwd=headless_cwd(),
+        )
+    except subprocess.TimeoutExpired:
+        # str(TimeoutExpired) embeds the full prompt (context + question); never let
+        # it reach the log. "claude" keeps policy.classify_error → engine_failed.
+        sys.exit(f"claude -p timed out after {CLAUDE_CODE_TIMEOUT_S} s")
     if proc.returncode != 0:
         sys.exit(f"claude -p failed: {proc.stderr.strip()[:300]}")
     return parse_claude_usage(proc.stdout, est_input_chars=len(user_content))

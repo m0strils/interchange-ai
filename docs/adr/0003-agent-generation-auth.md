@@ -64,6 +64,7 @@ runtime drive them.
   SDK's, not hand-rolled. Lesson 02 keeps the hand-rolled loop as reference.
 - **Telemetry becomes estimated**, not exact — the audit log records estimated
   tokens and `$0` cost, matching the existing `claude-code` engine convention.
+  *Superseded by ADR-0004 (2026-08-19): the CLI's JSON carries usage and cost, so telemetry is measured.*
 - New dependency: the Claude Agent SDK + an MCP tool server for our two tools.
 - The hand-rolled `agent.py` loop remains as teaching code and as an optional
   `--engine api` escape hatch if an API key is ever present.

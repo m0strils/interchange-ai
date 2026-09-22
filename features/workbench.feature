@@ -137,6 +137,7 @@ Feature: Browser workbench surface
     When I ask "what is an 824?"
     Then the response status is 429
     And the error code is "busy"
+    And an audit row records blocked "busy"
 
   Scenario: Metered spend is honest
     Given metered reranking is allowed and available

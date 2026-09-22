@@ -71,8 +71,9 @@ python interchange.py --engine claude-code --ask "..." # headless Claude Code on
 
 `--engine api` gives exact token/cost telemetry and is the standard production
 pattern. `--engine claude-code` shells out to `claude -p`, billing nothing extra
-if you have a Claude subscription (token counts are estimated; shares your
-subscription's usage limits). The audit log records which engine served each
+if you have a Claude subscription (tokens and an API-equivalent shadow cost are
+measured from the CLI's JSON, ADR-0004; $0 marginal; shares your subscription's
+usage limits). The audit log records which engine served each
 request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
 
 ### Browser workbench (`/ui`)

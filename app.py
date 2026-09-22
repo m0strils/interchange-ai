@@ -333,6 +333,20 @@ def _resolve_request(corpus, mode, k, rerank) -> dict:
             "rerank_backend": None if rerank_v == "none" else rerank_v}
 
 
+def _busy(correlation_id: str, caller: str) -> JSONResponse:
+    """Audit a ``busy`` refusal (the generation semaphore was full) and return the 429.
+
+    Sets the caller first: ``_preflight`` reset it in its ``finally`` before returning,
+    so without this the audit row would name the wrong (or no) caller. The row is the
+    same shape as the ``rate_limit`` / ``budget`` rows — no new audit keys (the A2A
+    key-parity assertion holds)."""
+    enterprise.CALLER.set(caller)
+    enterprise.audit(question="", model=interchange.MODEL, sources=[], in_tokens=0,
+                     out_tokens=0, latency_ms=0, grounded=False,
+                     blocked="busy", engine=default_engine())
+    return _error("busy", 429, correlation_id, "the server is busy", retry_after=5)
+
+
 def _error(code, status, correlation_id, message, retry_after=None) -> JSONResponse:
     headers = {"X-Request-Id": correlation_id}
     if retry_after is not None:
@@ -428,7 +442,7 @@ def _run_ask(request: Request, q, corpus, mode, k, rerank, pin, cross_site_check
 
     sema = policy.gen_semaphore()
     if not sema.acquire(blocking=False):
-        return _error("busy", 429, correlation_id, "the server is busy", retry_after=5)
+        return _busy(correlation_id, caller)
     ctoken = enterprise.CALLER.set(caller)
     try:
         detail = interchange.answer_detail(
@@ -550,6 +564,14 @@ class BodySizeLimitMiddleware:
 
 
 def create_app() -> FastAPI:
+    # Fail-fast on a mistyped engine: a typo in INTERCHANGE_ENGINE is a startup error
+    # (SystemExit), not a 500 on the first request. /health and /options.engine still
+    # echo the configured value verbatim.
+    engine = default_engine()
+    if engine not in interchange.ENGINES:
+        raise SystemExit(
+            f"INTERCHANGE_ENGINE={engine!r} is not one of {sorted(interchange.ENGINES)}")
+
     app = FastAPI(title="Interchange")
 
     @app.exception_handler(RequestValidationError)
@@ -696,7 +718,7 @@ def create_app() -> FastAPI:
 
         sema = policy.gen_semaphore()
         if not sema.acquire(blocking=False):
-            return _error("busy", 429, correlation_id, "the server is busy", retry_after=5)
+            return _busy(correlation_id, caller)
 
         loop = asyncio.get_running_loop()
         aq: asyncio.Queue = asyncio.Queue()

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pathlib
+import re
 import threading
 import time
 
@@ -28,10 +28,24 @@ from tests.conftest import fake_retrieval, last_audit_row, read_audit_rows
 
 scenarios("workbench.feature")
 
-BASELINE = pathlib.Path(
-    "/private/tmp/claude-501/-Users-starship-Documents-projects-lab-ai-portfolio/"
-    "915a0cfa-b73c-4c94-a66e-c2fbeb42654f/scratchpad/baseline/explain.err"
-)
+# The exact `--explain` stderr for the deterministic setup below: `fake_retrieval(*TWO_HITS)`
+# + the offline stub engine. Every value is fixed except the audit latency (`\d+ms`), which
+# is normalised to `Nms` before comparison. Inlined (F1) so the gate is portable — no
+# machine-specific fixture path, and the seven expected lines are checked in full, not just
+# their shapes. Regenerate from the test's own setup, never from a scratchpad file.
+EXPLAIN_EXPECTED = [
+    "  ┃ [explain] stage 1/5 input guardrail — checking for injection / limits (OWASP LLM01)",
+    "  ┃ [explain]   passed: no injection pattern, within length limit",
+    "  ┃ [explain] stage 2/5 retrieval — 2 chunk(s) from "
+    "['rail-edi-notes.md', 'x12-overview.md'] (top-k=4)",
+    "  ┃ [explain] stage 3/5 context — retrieved text is labeled reference DATA, never "
+    "instructions (defense against injected-content commands)",
+    "  ┃ [explain] stage 4/5 generation — engine=stub model=claude-sonnet-5",
+    "  ┃ [explain] stage 5/5 output guardrail — grounded ✅ — answer cites a retrieved "
+    "source (or is a legitimate 'context doesn't say' refusal)",
+    "  ┃ [explain]   audit: model=claude-sonnet-5 engine=stub "
+    "sources=['rail-edi-notes.md', 'x12-overview.md'] in=64 out=32 tok, Nms -> audit.jsonl",
+]
 
 TWO_HITS = (
     {"source": "x12-overview.md", "text": "An 824 reports application errors.", "chunk": 0},
@@ -503,18 +517,23 @@ def test_cancel_honoured_between_stages(monkeypatch):
     assert last_audit_row()["blocked"] == "cancelled"
 
 
-def test_explain_line_shapes_match_baseline(monkeypatch, capsys):
+def test_explain_matches_inlined_baseline(monkeypatch, capsys):
+    """F1: the `--explain` stderr equals the seven inlined expected lines exactly, after
+    normalising the only non-deterministic token (`\\d+ms` -> `Nms`). No fixture file: the
+    setup here (`fake_retrieval(*TWO_HITS)` + stub) makes the output deterministic, and a
+    committed fixture would drift with every corpus edit."""
     monkeypatch.setattr(
         interchange, "retrieve_detail",
         lambda q, **kw: fake_retrieval(*TWO_HITS))
     interchange.answer_detail("what is an 824?", engine="stub", explain=True)
-    lines = [ln for ln in capsys.readouterr().err.splitlines() if ln]
-    assert all(ln.startswith("  ┃ [explain] ") for ln in lines)
-    baseline = [ln for ln in BASELINE.read_text().splitlines() if ln]
-    assert len(lines) == len(baseline)
+    lines = [re.sub(r"\d+ms", "Nms", ln)
+             for ln in capsys.readouterr().err.splitlines() if ln]
+    assert lines == EXPLAIN_EXPECTED
+    # the salient markers are all present (defends the assertion above if a line moves)
+    joined = "\n".join(lines)
     for marker in ("stage 1/5", "stage 2/5", "stage 3/5", "stage 4/5", "stage 5/5",
                    "passed:", "audit:"):
-        assert any(marker in ln for ln in lines)
+        assert marker in joined
 
 
 def test_askresponse_forbids_extra(monkeypatch):
@@ -766,3 +785,46 @@ def test_stream_done_stage_and_frame_agree_on_request_id(monkeypatch):
     done = [d for e, d in frames if e == "done"][0]
     assert stage_done["data"]["request_id"]
     assert stage_done["data"]["request_id"] == done["request_id"]
+
+
+# --- units for the fail-fast engine + audited busy refusal (F2/F3) ----------
+def test_create_app_rejects_unknown_engine(monkeypatch):
+    """F2: a mistyped INTERCHANGE_ENGINE is a startup failure (SystemExit naming the
+    allowed engines), not a 500 on the first request."""
+    monkeypatch.setenv("INTERCHANGE_ENGINE", "bogus-engine")
+    with pytest.raises(SystemExit) as exc:
+        app_module.create_app()
+    msg = str(exc.value)
+    assert "bogus-engine" in msg
+    assert msg == (f"INTERCHANGE_ENGINE='bogus-engine' is not one of "
+                   f"{sorted(interchange.ENGINES)}")
+
+
+def test_busy_audit_row_matches_rate_limit_shape(monkeypatch):
+    """F3: the `busy` refusal writes an audit row of the exact same shape as the
+    `rate_limit` row (key-set parity, tests/test_a2a.py:268 style) with a `web/` caller
+    and no new audit keys."""
+    _stub_app_env(monkeypatch, max_concurrent="1")
+    client = TestClient(app)
+
+    # Fill the only generation slot so the next /ask is refused `busy`.
+    sema = policy.gen_semaphore()
+    assert sema.acquire(blocking=False) is True
+    busy = client.post("/ask", json={"q": "what is an 824?"},
+                       headers={"X-Session": "sess1234abcd"})
+    assert busy.status_code == 429 and busy.json()["code"] == "busy"
+    busy_row = last_audit_row()
+    sema.release()
+
+    # Now force a `rate_limit` refusal and compare the row shapes.
+    monkeypatch.setenv("INTERCHANGE_RATE_PER_MIN", "1")
+    policy.reset_buckets()
+    client.post("/ask", json={"q": "what is an 824?"}, headers={"X-Session": "sess1234abcd"})
+    rl = client.post("/ask", json={"q": "what is an 824?"},
+                     headers={"X-Session": "sess1234abcd"})
+    assert rl.status_code == 429 and rl.json()["code"] == "rate_limited"
+    rate_row = [r for r in read_audit_rows() if r.get("blocked") == "rate_limit"][-1]
+
+    assert busy_row["blocked"] == "busy"
+    assert set(busy_row.keys()) == set(rate_row.keys())
+    assert busy_row["caller"].startswith("web/")

@@ -21,6 +21,7 @@ INTERCHANGE_ENGINE=stub python -m uvicorn app:app   # browser workbench at /ui +
 #   Policy env vars for the web surface: see .env.example ("Browser workbench + HTTP policy tier").
 make a2a-demo PROFILE=hotel                         # two-agent A2A demo, $0 on the stub engine (rail|hotel)
 scripts/a2a-accept.sh                               # A2A Goal A acceptance gate (run with INTERCHANGE_ENGINE=claude-code)
+make workbench-accept                               # real-engine acceptance gate (ADR-0015): 5 claude -p calls on the subscription, $0 marginal; WB_ENGINE=stub self-tests at $0
 make reindex PROFILE=vault                          # index the read-only Obsidian vault corpus (ADR-0014)
 make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the vault golden set (ADR-0014)
 # ^ export INTERCHANGE_VAULT_DIR before both — DOCS_DIR resolves at import, before .env loads (ADR-0014)
