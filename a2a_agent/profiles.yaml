@@ -6,7 +6,16 @@
 # a third vertical means adding a block here, not writing new agent logic.
 #
 # A profile may also carry `ignore` (extra INTERCHANGE_IGNORE patterns for
-# corpus discovery) and `golden` (the eval set backing it).
+# corpus discovery), `golden` (the eval set backing it), a `persona` (the
+# system voice the answering agent adopts), a `retrieval` block (`mode`, and an
+# optional `rerank` backend), and a `tools` list (a subset of search_docs /
+# lookup_segment; the default keeps both).
+#
+# This file is the committed, public baseline. A private, uncommitted overlay
+# at $INTERCHANGE_PROFILES (default ~/.interchange/profiles.yaml; empty string
+# disables it) is merged on top — per named profile, its keys replace the
+# committed ones (lists replace whole, never concatenate), and a name absent
+# here is added entire. See a2a_agent/profiles.py (ADR-0016).
 
 rail:
   collection: edi
@@ -31,6 +40,11 @@ hotel:
     - "Can a guest get a late checkout at 2 pm, and is there a fee?"
     - "What is the cancellation policy for a non-refundable rate?"
     - "Are pets allowed, and what is the pet fee?"
+  tools: [search_docs]
+  persona: >
+    You are Interchange, an assistant for a fictional Demo Hotel's guest
+    policies. Answer only from the provided policy excerpts and cite the source
+    file in [brackets].
   knowledge_agent_name: interchange-knowledge (hotel)
   requester_name: interchange-requester (hotel)
   description: >
@@ -49,6 +63,13 @@ vault:
     - "03-RESOURCES/Templates/"
     - "scripts/"
   golden: eval/golden-vault.jsonl
+  retrieval:
+    mode: hybrid+rerank
+  tools: [search_docs]
+  persona: >
+    You are an assistant over a personal Obsidian vault indexed read-only.
+    Answer only from the provided notes, cite the note path in [brackets], and
+    say plainly when the notes do not cover the question.
   sample_question: "How many tags should a single document normally carry?"
   examples:
     - "How many tags should a single document normally carry?"

@@ -11,6 +11,17 @@ patterns) and a ``golden`` path (its eval set). ``docs_dir`` is expanded
 against the environment so a profile like ``vault`` can point at a path that
 only the shell knows (``${INTERCHANGE_VAULT_DIR}``); see ``profile_env`` for
 the env vars the runtime reads.
+
+Profiles are *portable data* (ADR-0016): the committed ``profiles.yaml`` is the
+public baseline, and a private, uncommitted **overlay** may extend it. The
+overlay path comes from ``INTERCHANGE_PROFILES`` (default
+``~/.interchange/profiles.yaml``; set it to the empty string to disable, or to a
+path to use that file). For each profile the overlay names it shallow-merges its
+keys over the committed block — scalars replace, list keys replace whole (never
+concatenate) — and a name the committed file does not have is added entire. This
+lets someone point ``vault`` at their own notes, tune ``persona`` / ``retrieval``
+/ ``tools``, or add whole new corpora without ever editing (or publishing) the
+committed file.
 """
 from __future__ import annotations
 
@@ -26,11 +37,55 @@ PROFILES_PATH = pathlib.Path(__file__).parent / "profiles.yaml"
 DEFAULT_PROFILE = "rail"
 #: Env var naming the profile this process serves.
 PROFILE_ENV = "DEMO_PROFILE"
+#: Env var naming the private profiles overlay (ADR-0016).
+OVERLAY_ENV = "INTERCHANGE_PROFILES"
+#: Default overlay location when ``OVERLAY_ENV`` is unset.
+DEFAULT_OVERLAY = "~/.interchange/profiles.yaml"
+
+#: The tools the knowledge agent may be granted; the rail default keeps both.
+KNOWN_TOOLS = {"search_docs", "lookup_segment"}
+DEFAULT_TOOLS = ["search_docs", "lookup_segment"]
+
+
+def overlay_path() -> pathlib.Path | None:
+    """The private overlay file to merge, or ``None`` when there is none.
+
+    ``INTERCHANGE_PROFILES`` unset → the default (``~/.interchange/profiles.yaml``,
+    expanded); set to the empty string → ``None`` (overlay disabled); set to a path
+    → that path (expanded). Returns ``None`` too when the resolved file is absent, so
+    a missing overlay is simply no overlay rather than an error.
+    """
+    raw = os.environ.get(OVERLAY_ENV)
+    if raw is None:
+        raw = DEFAULT_OVERLAY
+    elif raw == "":
+        return None
+    path = pathlib.Path(os.path.expanduser(raw))
+    return path if path.exists() else None
 
 
 def load_profiles() -> dict[str, dict]:
-    """Every profile block in ``profiles.yaml``, keyed by name."""
-    return yaml.safe_load(PROFILES_PATH.read_text(encoding="utf-8")) or {}
+    """Every profile block, committed with the private overlay merged on top.
+
+    The committed ``profiles.yaml`` is the baseline; each profile the overlay
+    (``overlay_path``) names is shallow-merged over its committed block — scalar
+    keys replace, list keys replace whole (never concatenate) — and a name the
+    committed file lacks is added entire. An empty/``None`` overlay changes nothing.
+    """
+    committed = yaml.safe_load(PROFILES_PATH.read_text(encoding="utf-8")) or {}
+    path = overlay_path()
+    if path is None:
+        return committed
+    overlay = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    for name, block in overlay.items():
+        base = committed.get(name)
+        if isinstance(base, dict) and isinstance(block, dict):
+            merged = dict(base)
+            merged.update(block)  # scalars + list keys replace; no concatenation
+            committed[name] = merged
+        else:
+            committed[name] = block
+    return committed
 
 
 def load_profile(name: str | None = None) -> dict:
@@ -57,7 +112,78 @@ def load_profile(name: str | None = None) -> dict:
                 "(it cannot come from .env)"
             )
         profile["docs_dir"] = expanded
+    golden = profile.get("golden")
+    if isinstance(golden, str):
+        profile["golden"] = os.path.expanduser(golden)
     return profile
+
+
+def profile_for_collection(name: str) -> dict | None:
+    """The first profile whose ``collection`` equals ``name`` (name attached), or
+    ``None`` if none matches.
+
+    Tolerant by design: a profile whose ``docs_dir`` cannot expand yet (e.g.
+    ``vault`` with no ``INTERCHANGE_VAULT_DIR``) must not raise here — a caller
+    resolving a collection to its persona/tools should not depend on the shell. We
+    catch the ``SystemExit`` ``load_profile`` would raise and return the raw block
+    (name attached, ``docs_dir`` left unexpanded) instead.
+    """
+    for pname, block in load_profiles().items():
+        if isinstance(block, dict) and str(block.get("collection")) == name:
+            try:
+                return load_profile(pname)
+            except SystemExit:
+                return {"name": pname, **block}
+    return None
+
+
+def profile_persona(profile: dict) -> str | None:
+    """The profile's system persona (stripped), or ``None`` when it carries none."""
+    persona = profile.get("persona")
+    if isinstance(persona, str) and persona.strip():
+        return persona.strip()
+    return None
+
+
+def profile_retrieval(profile: dict) -> dict:
+    """The profile's retrieval policy: ``{"mode": str, "rerank": str | None}``.
+
+    Defaults to ``{"mode": "hybrid", "rerank": None}`` when the profile carries no
+    ``retrieval`` block. ``mode`` is validated against ``interchange.MODES`` (a lazy
+    import, to avoid an import cycle); an unknown mode raises ``ValueError`` naming
+    the profile and the offending mode.
+    """
+    block = profile.get("retrieval") or {}
+    mode = block.get("mode", "hybrid")
+    rerank = block.get("rerank")
+    from interchange import MODES  # lazy: interchange imports are heavier + can cycle
+
+    if mode not in MODES:
+        raise ValueError(
+            f"profile {profile.get('name')!r}: unknown retrieval mode {mode!r}; "
+            f"expected one of {MODES}"
+        )
+    return {"mode": str(mode), "rerank": rerank}
+
+
+def profile_tools(profile: dict) -> list[str]:
+    """The tools the knowledge agent may use for this profile.
+
+    Defaults to ``["search_docs", "lookup_segment"]`` (the rail behaviour) when the
+    profile names none. Every entry is validated against ``KNOWN_TOOLS``; an unknown
+    tool raises ``ValueError`` naming the profile and the offending tool.
+    """
+    tools = profile.get("tools")
+    if tools is None:
+        return list(DEFAULT_TOOLS)
+    names = [str(t) for t in tools]
+    for tool in names:
+        if tool not in KNOWN_TOOLS:
+            raise ValueError(
+                f"profile {profile.get('name')!r}: unknown tool {tool!r}; "
+                f"expected a subset of {sorted(KNOWN_TOOLS)}"
+            )
+    return names
 
 
 def profile_examples(profile: dict | None = None) -> list[str]:
