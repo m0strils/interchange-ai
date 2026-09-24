@@ -121,22 +121,6 @@ embeddings download a model on first use. So the line we drew:
 Knowing *which* of your checks can run for free — and keeping the expensive ones out
 of the fast loop — is itself part of building for an enterprise.
 
-## Lead chunks: keeping topic tokens with the first real section
-
-Structure-aware chunking has a sharp edge. A note that opens with YAML frontmatter
-and an H1 title yields two tiny chunks — the `preamble` (the frontmatter) and the
-H1 section (title plus intro) — that are short and dense with exactly the topic
-tokens (`tags`, `type`, the title), so both BM25's length normalisation and the
-dense embedder rank them *above* the longer body sections that actually carry the
-answer. The retriever then finds the right note and returns the wrong passage. The
-fix ([ADR-0017](../docs/adr/0017-passage-level-retrieval-and-lead-chunks.md)) is a
-deterministic **lead-chunk merge** at ingest: fold that leading run of frontmatter
-and H1 chunks into the first body chunk when their combined size is under a
-threshold, so the topic tokens travel *with* the first real section instead of
-outranking it — zero query-time cost, one pure function, and (per this repo's rule)
-switched on only because the new passage-level eval **measures** the improvement,
-not because it sounds right.
-
 ## Map to the framework
 
 | Dimension | What this lesson adds |

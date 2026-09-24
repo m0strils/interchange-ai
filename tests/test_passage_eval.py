@@ -336,20 +336,13 @@ def meta_chunks_with_lead(context, spec):
 @given(parsers.parse("a one-note corpus of frontmatter, an H1 and an H2 body, "
                      "and a recording Chroma client"))
 def one_note_recording_corpus(context, tmp_path, monkeypatch):
-    # The H1 intro is deliberately long (> LEAD_MERGE_CHARS) so the preamble+H1 lead
-    # run is left ALONE by build_index's Slice-3 merge and the note stays THREE chunks
-    # — this scenario pins the lead-flag STORAGE (true,true,false) on the no-merge path;
-    # the merge path (a short lead run folding into the body) is covered in
-    # tests/test_lead_chunks.py (ADR-0017).
-    long_intro = ("Intro line under the H1 that runs on at length so the lead run "
-                  "clears the merge threshold. ") * 8
     note = (
         "---\n"
         "type: note\n"
         "tags: [demo]\n"
         "---\n"
         "# A Heading Unlike The Filename\n\n"
-        f"{long_intro}\n\n"
+        "Intro line under the H1.\n\n"
         "## Body\n\n"
         "The real body content lives here.\n"
     )
