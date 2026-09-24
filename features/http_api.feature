@@ -31,3 +31,21 @@ Feature: HTTP API
     Then the response status is 200
     And the pipeline read the collection "rail"
     And the response reports corpus "rail"
+
+  Scenario: CORS is off by default so any Origin is refused a CORS header
+    Given no CORS origins are configured
+    When I GET "/health" with Origin "https://brain.example"
+    Then the response status is 200
+    And the response has no CORS allow-origin header
+
+  Scenario: A configured Origin is echoed and others are not
+    Given the CORS origins are "http://localhost:5173, https://brain.example"
+    When I GET "/health" with Origin "http://localhost:5173"
+    Then the response status is 200
+    And the CORS allow-origin header is "http://localhost:5173"
+
+  Scenario: An unconfigured Origin gets no CORS header even when CORS is on
+    Given the CORS origins are "http://localhost:5173, https://brain.example"
+    When I GET "/health" with Origin "https://evil.example"
+    Then the response status is 200
+    And the response has no CORS allow-origin header

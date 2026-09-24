@@ -190,3 +190,45 @@ def test_post_ask_mirrors_get_and_missing_question_is_422(monkeypatch):
 
     assert client.get("/ask").status_code == 422
     assert client.post("/ask", json={}).status_code == 422
+
+
+# --- CORS (ADR-0016) -------------------------------------------------------
+# INTERCHANGE_CORS_ORIGINS lets a separate-origin personal frontend call the
+# surface. The app reads the env at create_app() time, so these steps build a
+# fresh app AFTER the env is set rather than reusing the module-level `app`.
+@given("no CORS origins are configured")
+def no_cors_origins(monkeypatch):
+    monkeypatch.delenv("INTERCHANGE_CORS_ORIGINS", raising=False)
+
+
+@given(parsers.parse('the CORS origins are "{origins}"'))
+def cors_origins_set(monkeypatch, origins):
+    monkeypatch.setenv("INTERCHANGE_CORS_ORIGINS", origins)
+
+
+@when(parsers.parse('I GET "{path}" with Origin "{origin}"'))
+def i_get_with_origin(context, path, origin):
+    # create_app() runs here, after the CORS env has been set by the Given step.
+    client = TestClient(http_app.create_app())
+    context["response"] = client.get(path, headers={"Origin": origin})
+
+
+@then("the response has no CORS allow-origin header")
+def no_cors_allow_origin(context):
+    assert "access-control-allow-origin" not in context["response"].headers
+
+
+@then(parsers.parse('the CORS allow-origin header is "{value}"'))
+def cors_allow_origin_is(context, value):
+    assert context["response"].headers.get("access-control-allow-origin") == value
+
+
+def test_cors_origins_from_env_parses_and_defaults_off():
+    """The pure parser: comma-split, trimmed, empties dropped; unset/empty is off."""
+    assert http_app.cors_origins_from_env({}) == []
+    assert http_app.cors_origins_from_env({"INTERCHANGE_CORS_ORIGINS": ""}) == []
+    assert http_app.cors_origins_from_env(
+        {"INTERCHANGE_CORS_ORIGINS": "  ,  "}) == []
+    assert http_app.cors_origins_from_env(
+        {"INTERCHANGE_CORS_ORIGINS": "http://localhost:5173, https://brain.example"}
+    ) == ["http://localhost:5173", "https://brain.example"]

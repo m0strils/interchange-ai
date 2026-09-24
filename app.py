@@ -24,7 +24,8 @@ answer is a 403 with a reason, never a silent downgrade. A per-host rate limit, 
 generation concurrency bound and a daily budget for metered reranking all answer 429
 and are audited. **No auth locally; fail-closed on a public deploy**: when
 ``A2A_PUBLIC_URL`` is not localhost, ``/ask*`` require ``X-API-Key`` (unset keys ⇒
-403), matching the signed Agent Card the same host publishes.
+403), matching the signed Agent Card the same host publishes. ``INTERCHANGE_CORS_ORIGINS``
+(comma-separated; empty/unset ⇒ no CORS middleware) opts a separate-origin frontend in.
 
 The app also carries the agent-to-agent surface (ADR-0013), mounted by
 ``a2a_agent.server.mount_a2a``: a signed Agent Card and an API-key-gated ``/a2a``.
@@ -44,6 +45,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -71,6 +73,18 @@ CSP = (
 def default_engine() -> str:
     """The generation engine unset requests use (same env knob as the CLI)."""
     return os.environ.get("INTERCHANGE_ENGINE", "api")
+
+
+def cors_origins_from_env(env=None) -> list[str]:
+    """Parse ``INTERCHANGE_CORS_ORIGINS`` into an allow-list of origins.
+
+    Comma-separated, each origin whitespace-trimmed, empties dropped. Unset or
+    empty yields ``[]`` — the same-origin default (no CORS middleware added), so a
+    separate-origin personal frontend (ADR-0016) is opt-in per process and never on
+    by accident. ``env`` defaults to ``os.environ``.
+    """
+    raw = (os.environ if env is None else env).get("INTERCHANGE_CORS_ORIGINS", "")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
 # --- wire vocabulary (review #7) -------------------------------------------
@@ -808,6 +822,19 @@ def create_app() -> FastAPI:
     # reading and replaying the request body before routing.
     app.add_middleware(BodySizeLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
+
+    # CORS for a separate-origin personal frontend (ADR-0016). Empty/unset =>
+    # add nothing (same-origin only, today's behaviour). Credentials are off: this
+    # is an origin allow-list for a read/ask surface, not a cookie-authenticated one.
+    cors_origins = cors_origins_from_env()
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+            allow_credentials=False,
+        )
 
     # Agent-to-agent surface (ADR-0013). The card advertises this base URL, so it
     # has to be the URL peers actually reach us on — Render sets A2A_PUBLIC_URL.
