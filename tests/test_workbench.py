@@ -24,7 +24,12 @@ import enterprise
 import interchange
 import policy
 from app import app
-from tests.conftest import fake_retrieval, last_audit_row, read_audit_rows
+from tests.conftest import (
+    fake_retrieval,
+    fake_snapshot,
+    last_audit_row,
+    read_audit_rows,
+)
 
 scenarios("workbench.feature")
 
@@ -51,6 +56,25 @@ TWO_HITS = (
     {"source": "x12-overview.md", "text": "An 824 reports application errors.", "chunk": 0},
     {"source": "rail-edi-notes.md", "text": "A 997 acknowledges receipt.", "chunk": 1},
 )
+
+# The second locked `--explain` baseline (ADR-0018): the SAME seven lines as
+# EXPLAIN_EXPECTED, except stage 2 (one hit from `note.md`) and stage 3, which in
+# `notes` mode appends the assembly counts. Driven below by a fake profile that declares
+# `context: notes` plus `conftest.fake_snapshot({"note.md": ["alpha", "beta"]})`: the whole
+# 2-chunk note assembles to `[note.md]\nalpha\n\nbeta` (21 chars), so the counts are fixed.
+EXPLAIN_EXPECTED_NOTES = [
+    "  ┃ [explain] stage 1/5 input guardrail — checking for injection / limits (OWASP LLM01)",
+    "  ┃ [explain]   passed: no injection pattern, within length limit",
+    "  ┃ [explain] stage 2/5 retrieval — 1 chunk(s) from ['note.md'] (top-k=4)",
+    "  ┃ [explain] stage 3/5 context — retrieved text is labeled reference DATA, never "
+    "instructions (defense against injected-content commands) — context=notes 1 notes, "
+    "2 chunks, 0.0k chars (budget 20000)",
+    "  ┃ [explain] stage 4/5 generation — engine=stub model=claude-sonnet-5",
+    "  ┃ [explain] stage 5/5 output guardrail — grounded ✅ — answer cites a retrieved "
+    "source (or is a legitimate 'context doesn't say' refusal)",
+    "  ┃ [explain]   audit: model=claude-sonnet-5 engine=stub "
+    "sources=['note.md'] in=64 out=32 tok, Nms -> audit.jsonl",
+]
 
 
 # --- Background ------------------------------------------------------------
@@ -534,6 +558,26 @@ def test_explain_matches_inlined_baseline(monkeypatch, capsys):
     for marker in ("stage 1/5", "stage 2/5", "stage 3/5", "stage 4/5", "stage 5/5",
                    "passed:", "audit:"):
         assert marker in joined
+
+
+def test_explain_notes_matches_locked_baseline(monkeypatch, capsys):
+    """ADR-0018: the second locked `--explain` baseline. A fake profile declares
+    `context: notes` and a fake snapshot supplies the note, so the stage-3 line appends
+    the assembly counts; the other lines match their `chunks` shapes. Only the audit
+    latency (`\\d+ms`) is normalised."""
+    fake_profile = {"name": "fake", "collection": "edi",
+                    "retrieval": {"context": "notes", "budget_chars": 20000,
+                                  "note_max_chars": 16000}}
+    monkeypatch.setattr(interchange, "profile_for_collection", lambda c: fake_profile)
+    monkeypatch.setattr(interchange, "corpus_snapshot",
+                        lambda c: fake_snapshot({"note.md": ["alpha", "beta"]}))
+    monkeypatch.setattr(
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval({"source": "note.md", "text": "alpha", "chunk": 0}))
+    interchange.answer_detail("what is it?", engine="stub", explain=True)
+    lines = [re.sub(r"\d+ms", "Nms", ln)
+             for ln in capsys.readouterr().err.splitlines() if ln]
+    assert lines == EXPLAIN_EXPECTED_NOTES
 
 
 def test_askresponse_forbids_extra(monkeypatch):

@@ -57,6 +57,12 @@ def search_docs(query: str) -> str:
     the top matching passages, each tagged with its [source] filename so the answer
     can cite it."""
     # Retrieve with the applied profile's default mode (ADR-0016), resolved per call.
+    # ADR-0018: this tool stays on CHUNKS regardless of the profile's `context` — it
+    # returns the raw retrieved passages (one [source] block per chunk), never the
+    # note-assembled context. It feeds a tool-bearing agent session that calls it
+    # repeatedly, the weakest downstream containment; note assembly (whole personal
+    # notes) never happens here. We call `retrieve()` (retrieval only, no assemble step)
+    # to make that explicit — assembly lives solely in `answer_detail`.
     mode = (interchange.PROFILE_RETRIEVAL or {}).get("mode", "hybrid")
     hits = retrieve(query, mode=mode)
     if not hits:

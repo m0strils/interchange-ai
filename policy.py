@@ -54,6 +54,18 @@ def locked_knobs() -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
+def unlocked_knobs() -> set[str]:
+    """Knobs that are **locked by default** and a request may name only when the
+    operator opts them in via ``INTERCHANGE_UNLOCKED`` (comma list; default empty).
+
+    ADR-0018 locks the HTTP ``context`` knob by default — a shared/public surface must
+    not let a caller widen its own context to whole notes over a personal vault — so it
+    is honoured only when ``"context"`` appears here. This is the inverse of
+    ``locked_knobs`` (which starts open and names what to close)."""
+    raw = os.environ.get("INTERCHANGE_UNLOCKED", "")
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
 def allow_metered() -> bool:
     """Whether ``rerank=typesafe`` is permitted at all (``INTERCHANGE_ALLOW_METERED``)."""
     return os.environ.get("INTERCHANGE_ALLOW_METERED", "0") == "1"

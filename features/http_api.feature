@@ -83,3 +83,22 @@ Feature: HTTP API
     When I POST "/ask" with an unknown field
     Then the response status is 422
     And the error code is "invalid_request"
+
+  Scenario: The context knob is locked by default so a body naming it is refused
+    When I POST "/ask" naming context "notes"
+    Then the response status is 403
+    And the error code is "knob_locked"
+    And the response message is "Context is locked by policy."
+
+  Scenario: An unlocked context knob is honoured and assembled by note
+    Given the context knob is unlocked
+    And the snapshot assembles the retrieved note
+    When I POST "/ask" naming context "notes"
+    Then the response status is 200
+    And the response is grounded
+    And the response context mode is "notes"
+
+  Scenario: The options document reports the context knob and its lock state
+    When I GET "/options"
+    Then the response status is 200
+    And the options context knob is locked
