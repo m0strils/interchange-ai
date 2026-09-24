@@ -1,6 +1,6 @@
 # ADR-0016: Corpus profiles as portable data — overlay, index dir, persona, retrieval, tools
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-09-23; measured — see Updates)
 - **Date:** 2026-09-23
 - **Deciders:** Jeff Lynch
 
@@ -188,3 +188,63 @@ recorded its ablations:
   set are untouched by the overlay and the new keys.
 - **`make a2a-demo PROFILE=hotel`** passing — the per-request persona/tool resolution
   answers `hotel` correctly on the $0 stub engine.
+
+## Update 2026-09-23 — rebuild time measured, incremental reindex stays deferred
+Slice 2 landed `INTERCHANGE_CHROMA_DIR`, `--profile` and the timed `--reindex`. All five
+profiles were rebuilt into one workspace store (`~/.interchange/chroma`, 59 MB after the
+run) on the local default embedder, one process each, back to back (**measured**, wall
+clock from the `Indexed …` summary line; Apple silicon laptop):
+
+| profile | files | chunks | rebuild |
+|---|---:|---:|---:|
+| rail | 3 | 12 | 0.3 s |
+| hotel | 3 | 21 | 0.3 s |
+| brain (`~/Documents/Brain`, overlay) | 25 | 407 | 3.0 s |
+| research (`~/Documents/Last30Days`, overlay) | 13 | 808 | 5.5 s |
+| vault (`~/Documents/Notes`, ADR-0014 corpus) | 188 | 4,614 | 30.2 s |
+
+The largest corpus rebuilds in **30 s** against the **5-minute** trigger, so the nightly
+full rebuild is the freshness story and **incremental upsert by content hash stays
+deferred** — it would be code without a measurement behind it. Two profiles defined only
+in the overlay (`brain`, `research`) indexed with no edit to the tree, which is the
+portable-profile claim, exercised. The eval reproduction (vault 15/18 rerank, 11/18
+hybrid; rail 14/14) is recorded below once the persona and retrieval-mode slices land.
+
+## Update 2026-09-23 — evals reproduced, brain baseline seeded, Accepted
+All seven slices are on `feature/corpus-profiles` (288 tests, up from 247; every slice
+gated offline). The verification list above, **measured** on the shared workspace store:
+
+- `make eval PROFILE=vault` with `MODE` unset now runs the profile's declared
+  `hybrid+rerank` and reproduces ADR-0014's **15/18 hit@1**; `MODE=hybrid` reproduces
+  **11/18**. The declared default moved nothing, as required.
+- Rail is unchanged at **14/14 hit@1** with the overlay present and the new keys in place.
+- `DEMO_PROFILE=brain` starts the MCP server with `search_docs` + `ask_interchange` only;
+  `rail` still exposes `lookup_segment`.
+- A live `--profile brain --engine claude-code --ask` answered from the vault in 6 s at $0
+  marginal, cited the decision note, and left an audit row. It also showed a real gap: for
+  a "why" question the top-4 caught the *Decision* section but not the *Options* section of
+  the same note. Recorded as a paraphrase row in the brain golden set rather than fixed.
+- **Brain golden baseline** — 16 rows seeded from the indexed notes (10 exact, 4 paraphrase,
+  1 linked, 1 added via `--golden-add`, which validated the source against the index and
+  refused an unindexed path), `k=4`, `pool=20`, `rerank_n=30`, local cross-encoder:
+
+  | mode | hit@1 | hit@4 | near-miss |
+  |---|---:|---:|---:|
+  | hybrid | 11/15 | 15/15 | 0 |
+  | dense | 12/15 | 15/15 | 0 |
+  | bm25 | 10/15 | 13/15 | 1 |
+  | hybrid+links | 7/15 | 15/15 | 0 |
+  | hybrid+rerank | 12/15 | 14/15 | 1 |
+
+  (15 answerable at eval time; the 16th row was added after the run.) Honest reading: on a
+  25-note corpus the reranker lifts hit@1 by one row and *drops* one row out of the top-4,
+  so its ADR-0014 win does not automatically transfer to a tiny corpus — the `brain`
+  profile keeps `hybrid+rerank` declared, and this table is the baseline to beat as the
+  vault grows. Link expansion regresses here too (7/15), consistent with ADR-0014.
+- Rebuild times (previous update) settle the freshness sub-decision: nightly full rebuild,
+  incremental upsert deferred with its trigger intact.
+
+Left open, trigger-gated: cross-corpus fan-out, atomic rebuild + hash-keyed snapshot
+cache, orphaned-segment cleanup in the shared store, and the retrieval gap on multi-section
+"why" questions (candidates: section-aware neighbour expansion within the *same* note, or a
+larger `k` for the brain profile — both need a measurement first).
