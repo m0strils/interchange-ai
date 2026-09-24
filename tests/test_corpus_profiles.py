@@ -194,7 +194,9 @@ def profile_tools_are(name, tools):
 def profile_retrieval_default(name, mode):
     from a2a_agent.profiles import profile_retrieval
 
-    assert profile_retrieval(_raw_profile(name)) == {"mode": mode, "rerank": None}
+    # profile_retrieval grew ADR-0018 context keys; the mode/rerank keys are unchanged.
+    result = profile_retrieval(_raw_profile(name))
+    assert result["mode"] == mode and result["rerank"] is None
 
 
 @then(parsers.parse('the "{name}" profile\'s retrieval mode is "{mode}"'))

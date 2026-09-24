@@ -32,7 +32,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 
@@ -120,6 +120,14 @@ MODES = ("hybrid", "dense", "bm25", "hybrid+links", "hybrid+rerank")
 # Which rerank backend INTERCHANGE_RERANK selects (ADR-0014). The local
 # cross-encoder is $0 and the default; "typesafe" is metered and opt-in.
 RERANK_BACKEND = os.environ.get("INTERCHANGE_RERANK", "cross-encoder")
+# Context assembly (ADR-0018): the unit of retrieval is not the unit of context.
+# `chunks` is today's behaviour (the default for every profile that does not opt in);
+# `notes` seeds every hit's own chunk then expands each hit to its whole note (under
+# `NOTE_MAX_CHARS`) or to its neighbours. Neighbour expansion is the internal fallback
+# of `notes`, never a third public value. Budgets are measured on the emitted string.
+CONTEXT_MODES = ("chunks", "notes")
+CONTEXT_BUDGET_CHARS = 20000   # ADR-0018: max assembled context chars, headers included
+NOTE_MAX_CHARS = 16000         # ADR-0018: a note larger than this never assembles whole
 GOLDEN_PATH = pathlib.Path(__file__).parent / "eval" / "golden.jsonl"
 EVAL_LOG = pathlib.Path(__file__).parent / "eval" / "eval-runs.jsonl"
 
@@ -965,6 +973,9 @@ class Snapshot:
     metas: list
     bm25: object
     space: str
+    #: Lazily-filled per-source chunk map (ADR-0018), built once by ``chunk_map``.
+    #: Excluded from equality/repr so it never changes how a Snapshot compares.
+    chunk_map_cache: dict | None = field(default=None, compare=False, repr=False)
 
 
 _SNAP_CACHE: dict[str, Snapshot] = {}
@@ -1026,6 +1037,250 @@ def corpus_snapshot(collection: str) -> Snapshot:
     with _SNAP_LOCK:
         _SNAP_CACHE[collection] = snap
     return snap
+
+
+# --- context assembly (ADR-0018): assemble context by note, under a budget ---
+def chunk_map(snapshot: Snapshot) -> dict[str, list[int]]:
+    """Per-source snapshot indices sorted by ``int(meta["chunk"])`` (ADR-0018).
+
+    Chroma's ``get`` order is not relied on anywhere in assembly: this is the one
+    place chunk order is established, from the ``chunk`` metadata, so a shuffled
+    snapshot still assembles a note in chunk-index order. Built once and cached on
+    the ``Snapshot`` (``chunk_map_cache``); a source with no ``chunk`` metadata is
+    skipped rather than crashing the map.
+    """
+    cached = getattr(snapshot, "chunk_map_cache", None)
+    if cached is not None:
+        return cached
+    groups: dict[str, list[tuple[int, int]]] = {}
+    for i, meta in enumerate(snapshot.metas):
+        meta = meta or {}
+        source = meta.get("source")
+        chunk_idx = meta.get("chunk")
+        if source is None or chunk_idx is None:
+            continue
+        groups.setdefault(source, []).append((int(chunk_idx), i))
+    result = {src: [idx for _, idx in sorted(pairs)] for src, pairs in groups.items()}
+    try:
+        snapshot.chunk_map_cache = result
+    except Exception:  # a stub snapshot that forbids attribute set — just don't cache
+        pass
+    return result
+
+
+@dataclass
+class Assembled:
+    """The context a single request's hits assemble into (ADR-0018): the emitted
+    ``text`` and the accounting the frame, audit row, span and eval read.
+
+    - ``included``: ``(source, chunk_index)`` for every emitted chunk, in emission
+      order (source block order, chunk-index order within a source).
+    - ``hit_sources``: the input hits' sources, unique, in rank order.
+    - ``included_sources``: sources that contributed at least one character, in
+      emission order (what grounding/citation/audit follow — review finding #2).
+    - ``chars`` == ``len(text)``; ``chunks_in`` = input hits; ``chunks_out`` =
+      emitted chunks.
+    - ``dropped_hits``: hits whose own chunk was not in the snapshot (0 by
+      construction — the seed pass always fits — but counted anyway).
+    - ``fallbacks``: hits whose note fell back to neighbour expansion.
+    - ``budget_hit``: a budget constraint stopped an inclusion.
+    - ``secret_drops``: expansion-added chunks dropped by ``looks_like_secret``.
+    - ``reasons``: per source, one of ``whole`` / ``neighbours`` / ``seed-only`` /
+      ``note_too_big`` / ``budget_exhausted`` (empty in ``chunks`` mode).
+    """
+    text: str
+    included: list
+    hit_sources: list
+    included_sources: list
+    chars: int
+    chunks_in: int
+    chunks_out: int
+    dropped_hits: int
+    fallbacks: int
+    budget_hit: bool
+    secret_drops: int
+    reasons: dict
+
+
+def _positive_int(name: str, value) -> None:
+    """Raise a named ``ValueError`` unless ``value`` is a positive ``int`` (not a
+    ``bool``, not a string)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"assemble_context: {name} must be a positive int, got {value!r}"
+        )
+
+
+def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
+                     budget_chars: int = CONTEXT_BUDGET_CHARS,
+                     note_max_chars: int = NOTE_MAX_CHARS) -> Assembled:
+    """Assemble the context the engine sees from ranked ``hits`` (ADR-0018), pure.
+
+    ``hits`` are the Hit dicts (``source``, ``chunk`` = chunk index, ``text``…).
+    ``mode == "chunks"`` reproduces today's context byte-for-byte:
+    ``"\\n\\n".join(f"[{source}]\\n{text}")`` over the hits in order. ``mode ==
+    "notes"`` runs the two-pass budgeted assembler: a seed pass includes every hit's
+    own chunk (so ``assembled ⊇ chunks`` holds by construction), then an expand pass
+    grows each hit to its whole note when it fits both the cap and the remaining
+    budget, else to its neighbours. Budget is measured on the emitted string, headers
+    included; a note that does not fit is skipped whole, never truncated.
+    """
+    if mode not in CONTEXT_MODES:
+        raise ValueError(
+            f"assemble_context: unknown mode {mode!r}; expected one of {CONTEXT_MODES}"
+        )
+    _positive_int("budget_chars", budget_chars)
+    _positive_int("note_max_chars", note_max_chars)
+    if note_max_chars > budget_chars:
+        raise ValueError(
+            f"assemble_context: note_max_chars ({note_max_chars}) must be "
+            f"<= budget_chars ({budget_chars})"
+        )
+
+    # sources of the input hits, unique, in rank order
+    hit_sources: list[str] = []
+    for h in hits:
+        s = h.get("source")
+        if s is not None and s not in hit_sources:
+            hit_sources.append(s)
+
+    if mode == "chunks":
+        # byte-identical to what answer_detail builds today
+        text = "\n\n".join(f"[{h['source']}]\n{h['text']}" for h in hits)
+        included = [(h.get("source"), h.get("chunk")) for h in hits]
+        return Assembled(
+            text=text, included=included, hit_sources=hit_sources,
+            included_sources=list(hit_sources), chars=len(text),
+            chunks_in=len(hits), chunks_out=len(hits), dropped_hits=0,
+            fallbacks=0, budget_hit=False, secret_drops=0, reasons={},
+        )
+
+    # -- notes mode ---------------------------------------------------------
+    cmap = chunk_map(snapshot)
+    # snapshot text for any (source, chunk_index)
+    text_by_ref: dict[tuple, str] = {}
+    for i, meta in enumerate(snapshot.metas):
+        meta = meta or {}
+        src = meta.get("source")
+        ci = meta.get("chunk")
+        if src is None or ci is None:
+            continue
+        text_by_ref[(src, int(ci))] = snapshot.docs[i]
+
+    included: dict[str, set] = {}          # source -> set of chunk indices emitted
+    source_order: list[str] = []           # first-seed rank order, for block emission
+    reasons: dict[str, str] = {}
+    dropped_hits = 0
+    fallbacks = 0
+    secret_drops = 0
+    budget_hit = False
+
+    def note_indices(source: str) -> list[int]:
+        """The source's chunk indices in chunk-index order (from the chunk map)."""
+        return [int(snapshot.metas[i].get("chunk"))
+                for i in cmap.get(source, [])]
+
+    def emit(current: dict[str, set]) -> str:
+        blocks = []
+        for s in source_order:
+            idxs = sorted(current.get(s, ()))
+            if not idxs:
+                continue
+            body = "\n\n".join(text_by_ref[(s, ci)] for ci in idxs)
+            blocks.append(f"[{s}]\n{body}")
+        return "\n\n".join(blocks)
+
+    # -- pass 1: seed every hit's own chunk (always fits: 4 x <= 1200 chars) --
+    for h in hits:
+        ref = (h.get("source"), int(h["chunk"]))
+        if ref in text_by_ref:
+            src = ref[0]
+            if src not in included:
+                included[src] = set()
+                source_order.append(src)
+            included[src].add(ref[1])
+        else:
+            dropped_hits += 1
+
+    if len(emit(included)) > budget_chars:
+        # the seeds alone already exceed the budget; they are never dropped
+        # (assembled superset chunks), but record that the budget was blown.
+        budget_hit = True
+
+    # -- pass 2: expand each hit to its whole note or to its neighbours -------
+    for h in hits:
+        source = h.get("source")
+        if source not in included:      # its own chunk was dropped; nothing to grow
+            continue
+        if reasons.get(source) == "whole":
+            continue                    # already fully included via an earlier hit
+        note_idxs = note_indices(source)
+        if not note_idxs:
+            continue
+        total_chars = sum(len(text_by_ref[(source, ci)]) for ci in note_idxs)
+        entered_fallback = False
+
+        if total_chars <= note_max_chars:
+            # whole-note candidate: seeds + every other chunk that is not a secret
+            candidate = dict((s, set(v)) for s, v in included.items())
+            for ci in note_idxs:
+                if ci in candidate[source]:
+                    continue            # already a seed — never re-added, never dropped
+                if looks_like_secret(text_by_ref[(source, ci)]):
+                    secret_drops += 1
+                    continue
+                candidate[source].add(ci)
+            if len(emit(candidate)) <= budget_chars:
+                included = candidate
+                reasons[source] = "whole"
+                continue
+            # whole note is under the cap but does not fit the remaining budget:
+            # skip it whole (never truncate mid-chunk), then try neighbours.
+            reasons[source] = "budget_exhausted"
+            budget_hit = True
+            entered_fallback = True
+        else:
+            reasons[source] = "note_too_big"
+            entered_fallback = True
+
+        # neighbour widening: +/-1, +/-2, ... around the hit's chunk, budget-bounded
+        center = int(h["chunk"])
+        present = set(note_idxs)
+        added_any = False
+        max_span = max((center - min(present)), (max(present) - center), 0)
+        for d in range(1, max_span + 1):
+            for cand in (center - d, center + d):
+                if cand not in present or cand in included[source]:
+                    continue
+                if looks_like_secret(text_by_ref[(source, cand)]):
+                    secret_drops += 1
+                    continue
+                trial = dict((s, set(v)) for s, v in included.items())
+                trial[source].add(cand)
+                if len(emit(trial)) <= budget_chars:
+                    included = trial
+                    added_any = True
+                else:
+                    budget_hit = True
+        if entered_fallback:
+            fallbacks += 1
+        # `note_too_big` / `budget_exhausted` explain WHY the whole note was not
+        # taken and win over the generic widen labels; the `neighbours` / `seed-only`
+        # branch is the default for any widen path that is neither (kept live for the
+        # eval and future paths).
+        if reasons.get(source) not in ("note_too_big", "budget_exhausted"):
+            reasons[source] = "neighbours" if added_any else "seed-only"
+
+    text = emit(included)
+    included_list = [(s, ci) for s in source_order for ci in sorted(included.get(s, ()))]
+    included_sources = [s for s in source_order if included.get(s)]
+    return Assembled(
+        text=text, included=included_list, hit_sources=hit_sources,
+        included_sources=included_sources, chars=len(text),
+        chunks_in=len(hits), chunks_out=len(included_list),
+        dropped_hits=dropped_hits, fallbacks=fallbacks, budget_hit=budget_hit,
+        secret_drops=secret_drops, reasons=reasons,
+    )
 
 
 # --- pin tokens (HMAC capability, corpus-scoped) --------------------------

@@ -76,6 +76,55 @@ def ui_enabled() -> bool:
     return os.environ.get("INTERCHANGE_UI", "1") != "0"
 
 
+# --- context-assembly clamp (ADR-0018; policy over profile) ----------------
+#: Context modes in increasing order of how much context they assemble.
+_CONTEXT_MODE_ORDER = ("chunks", "notes")
+
+
+def context_mode_max() -> str:
+    """The most permissive context mode a profile may resolve to (ADR-0018).
+
+    ``INTERCHANGE_CONTEXT_MODE_MAX`` if set, else ``chunks`` on a genuinely public
+    deploy and ``notes`` locally — reusing ``auth_required()`` (a public host is one
+    whose ``A2A_PUBLIC_URL`` is not localhost), so the default tracks the same
+    public-deploy signal the auth rule does.
+    """
+    default = "chunks" if auth_required() else "notes"
+    return os.environ.get("INTERCHANGE_CONTEXT_MODE_MAX", default)
+
+
+def context_budget_max() -> int:
+    """The budget ceiling a profile's ``budget_chars`` is capped at
+    (``INTERCHANGE_CONTEXT_BUDGET_MAX``, default 24000)."""
+    return int(os.environ.get("INTERCHANGE_CONTEXT_BUDGET_MAX", "24000"))
+
+
+def clamp_context(settings: dict) -> dict:
+    """Clamp resolved context ``settings`` by policy (ADR-0018): policy over profile.
+
+    Lowers ``context`` to ``context_mode_max()`` (``chunks`` < ``notes``) and caps
+    ``budget_chars`` at ``context_budget_max()``, then restores the
+    ``note_max_chars <= budget_chars`` invariant if the cap made it too big. Pure;
+    returns a new dict and leaves keys it does not manage untouched.
+    """
+    out = dict(settings)
+
+    def _rank(mode: str) -> int:
+        return _CONTEXT_MODE_ORDER.index(mode) if mode in _CONTEXT_MODE_ORDER else 0
+
+    mode_max = context_mode_max()
+    if "context" in out and _rank(out["context"]) > _rank(mode_max):
+        out["context"] = mode_max
+
+    budget_max = context_budget_max()
+    if out.get("budget_chars") is not None and out["budget_chars"] > budget_max:
+        out["budget_chars"] = budget_max
+    if (out.get("note_max_chars") is not None and out.get("budget_chars") is not None
+            and out["note_max_chars"] > out["budget_chars"]):
+        out["note_max_chars"] = out["budget_chars"]
+    return out
+
+
 # --- fail-closed public auth (review #10) ----------------------------------
 def _is_localhost(host: str | None) -> bool:
     return (host or "").lower() in {"localhost", "127.0.0.1", "::1", ""}
