@@ -97,6 +97,10 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
         "claude", "-p", question,
         "--mcp-config", mcp_config,
         "--allowedTools", _ALLOWED_TOOLS,
+        # Only the --mcp-config interchange server loads; the machine's user-scope
+        # MCP servers (Obsidian vaults) never enter this session even though the
+        # allow-list already blocks their use, so they cost no context (2026-09-23).
+        "--strict-mcp-config",
         "--append-system-prompt", SYSTEM_PROMPT,
         "--output-format", "json",
         "--setting-sources", "user",
