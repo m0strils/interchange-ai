@@ -27,6 +27,7 @@ import sys
 import time
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
+from a2a_agent.profiles import load_profile, profile_persona, profile_tools
 from enterprise import GuardrailViolation, audit, guard_input, guard_output
 from interchange import (
     DOCS_DIR,
@@ -41,11 +42,8 @@ from interchange import (
 _HERE = pathlib.Path(__file__).parent
 _MCP_SERVER = _HERE / "mcp_server.py"
 
-# Least privilege: allow ONLY our two MCP tools — no bash, no file access. This is
-# the enterprise-readiness Security posture (scoped, allow-listed tools) and it's
-# why we do NOT use a blanket bypass-permissions mode.
-_ALLOWED_TOOLS = "mcp__interchange__search_docs,mcp__interchange__lookup_segment"
-
+# The rail default persona, used when the active profile carries no `persona`
+# (ADR-0016 slice 3). agent_system_prompt() appends a least-privilege tool sentence.
 SYSTEM_PROMPT = (
     "You are Interchange, an assistant for X12/EDI and rail trading-partner "
     "integration. Use the MCP tools to gather information before answering — "
@@ -54,6 +52,41 @@ SYSTEM_PROMPT = (
     "and cite the source filename in [brackets] for retrieved facts. If the tools "
     "do not contain the answer, say so plainly — do not invent details."
 )
+
+
+def _active_profile() -> dict:
+    """The profile this subscription agent serves this call (ADR-0016 slice 3).
+
+    ``interchange.apply_profile`` exports ``DEMO_PROFILE`` when it runs, so
+    ``load_profile()`` (argless → ``DEMO_PROFILE``, default ``rail``) returns the
+    applied profile — persona, tools and all. Tolerant: a profile whose ``docs_dir``
+    env is unset raises ``SystemExit`` and an unknown name raises ``KeyError``;
+    either falls back to rail defaults (an empty block → no persona, both tools)."""
+    try:
+        return load_profile()
+    except (SystemExit, KeyError):
+        return {}
+
+
+def allowed_tools(profile: dict | None = None) -> str:
+    """The ``--allowedTools`` allow-list for the active (or given) profile: the
+    profile's tools, each namespaced ``mcp__interchange__<tool>`` and comma-joined.
+
+    Least privilege (the enterprise-readiness Security posture — scoped, allow-listed
+    tools, no blanket bypass): a notes profile that lists only ``search_docs`` never
+    gets ``lookup_segment`` (ADR-0016). Rail keeps both, unchanged."""
+    p = _active_profile() if profile is None else profile
+    return ",".join(f"mcp__interchange__{tool}" for tool in profile_tools(p))
+
+
+def agent_system_prompt(profile: dict | None = None) -> str:
+    """The subscription agent's system voice for the active (or given) profile: the
+    profile's ``persona`` (ADR-0016) or the rail default ``SYSTEM_PROMPT``, plus one
+    sentence naming the MCP tools it may use (built from ``profile_tools``)."""
+    p = _active_profile() if profile is None else profile
+    base = profile_persona(p) or SYSTEM_PROMPT
+    tools = ", ".join(profile_tools(p))
+    return f"{base} You may use only these MCP tools: {tools}."
 
 
 def answer_agentic_sub(question: str, explain: bool = False) -> str:
@@ -93,17 +126,22 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
             }
         }
     })
+    # Persona + tool allow-list follow the active profile at call time (ADR-0016):
+    # the corpus a single process serves picks its own voice and least-privilege tools.
+    profile = _active_profile()
+    prompt = agent_system_prompt(profile)
+    allowed = allowed_tools(profile)
     cmd = [
         "claude", "-p", question,
         "--mcp-config", mcp_config,
-        "--allowedTools", _ALLOWED_TOOLS,
-        "--append-system-prompt", SYSTEM_PROMPT,
+        "--allowedTools", allowed,
+        "--append-system-prompt", prompt,
         "--output-format", "json",
         "--setting-sources", "user",
     ]
     if explain:
         _explain(f"stage 2 launching headless Claude Code on your subscription "
-                 f"with MCP tools [{_ALLOWED_TOOLS}] (least-privilege allow-list)")
+                 f"with MCP tools [{allowed}] (least-privilege allow-list)")
 
     # When tracing is on, hand Claude Code its own OTel env so it emits the native
     # interaction->llm_request->tool span tree and propagates traceparent into the MCP
@@ -121,7 +159,7 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
     # shadow cost when `claude -p` reports them, else a LABELED estimate over the full
     # prompt sent (system + question). model = what actually ran (Opus), not MODEL.
     info = parse_claude_usage(proc.stdout,
-                              est_input_chars=len(SYSTEM_PROMPT) + len(question))
+                              est_input_chars=len(prompt) + len(question))
     text = info["text"]
     in_tokens, out_tokens = info["in"], info["out"]
     cost, telemetry, model = info["cost"], info["telemetry"], info["model"]

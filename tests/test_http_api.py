@@ -136,6 +136,21 @@ def response_corpus(context, corpus):
     assert context["response"].json()["corpus"] == corpus
 
 
+# --- /options examples follow the default corpus (ADR-0016 slice 3) --------
+@given(parsers.parse('the corpora allow-list is "{corpora}"'))
+def corpora_allow_list(monkeypatch, corpora):
+    # policy.default_corpus() reads INTERCHANGE_CORPORA live, so /options picks the
+    # first corpus here and profile_for_collection maps it to that profile's examples.
+    monkeypatch.setenv("INTERCHANGE_CORPORA", corpora)
+
+
+@then(parsers.parse('the first example mentions "{needle}"'))
+def first_example_mentions(context, needle):
+    examples = context["response"].json()["examples"]
+    assert examples, "no examples returned"
+    assert needle in examples[0]
+
+
 # --- units -----------------------------------------------------------------
 def test_stub_engine_answers_grounded(monkeypatch):
     """The offline `stub` engine cites the retrieved source, so it passes the

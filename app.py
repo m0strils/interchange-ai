@@ -55,7 +55,7 @@ import a2a_agent.server as a2a_server
 import enterprise
 import interchange
 import policy
-from a2a_agent.profiles import profile_examples
+from a2a_agent.profiles import profile_examples, profile_for_collection
 from a2a_agent.server import mount_a2a
 
 logger = logging.getLogger("interchange.web")
@@ -626,6 +626,11 @@ def create_app() -> FastAPI:
         rerank_allowed, rerank_unavailable = policy.rerank_availability()
         corpus = policy.default_corpus()
         idx = interchange.index_meta(corpus)
+        # Examples follow the default corpus, not $DEMO_PROFILE (ADR-0016): one server
+        # mounting several corpora must show the default corpus's cold-start prompts.
+        _corpus_profile = profile_for_collection(corpus)
+        examples = (profile_examples(_corpus_profile) if _corpus_profile is not None
+                    else profile_examples())
 
         def _reason(knob: str) -> str | None:
             return f"{knob.capitalize()} is locked by policy." if knob in locked else None
@@ -650,7 +655,7 @@ def create_app() -> FastAPI:
             "engine": default_engine(),
             "auth_required": policy.auth_required(),
             "ui": policy.ui_enabled(),
-            "examples": profile_examples(),
+            "examples": examples,
         }
         return JSONResponse(doc, headers={"X-Request-Id": uuid.uuid4().hex[:12]})
 

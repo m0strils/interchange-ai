@@ -21,6 +21,7 @@ import contextvars
 import fnmatch
 import hashlib
 import hmac
+import logging
 import os
 import pathlib
 import posixpath
@@ -34,6 +35,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
+
+logger = logging.getLogger(__name__)
 
 # --- config ---------------------------------------------------------------
 DOCS_DIR = pathlib.Path(
@@ -87,6 +90,15 @@ _ACTIVE_COLLECTION: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def active_collection() -> str:
     """The collection name this request should read/write."""
     return _ACTIVE_COLLECTION.get() or COLLECTION
+
+
+# The persona a single request answers with. `answer_detail` sets it per request
+# from the corpus's profile (ADR-0016 slice 3), so one process answers `hotel`
+# with a hotel voice and `edi` with the rail default — without mutating module
+# state. Unset, the module `SYSTEM_PROMPT` default (below) wins.
+_ACTIVE_PERSONA: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "persona", default=None
+)
 # Model IDs (2026): "claude-sonnet-5" (balanced), "claude-haiku-4-5-20251001" (cheaper/faster).
 MODEL = os.environ.get("INTERCHANGE_MODEL", "claude-sonnet-5")
 CHUNK_CHARS = 1200          # max section-body size before a section is windowed
@@ -117,6 +129,13 @@ SYSTEM_PROMPT = (
     "Cite the source filename in [brackets] after each claim. If the context "
     "does not contain the answer, say so plainly — do not invent details."
 )
+
+
+def system_prompt() -> str:
+    """The system prompt this request should answer with: the active persona (set
+    per request by ``answer_detail`` from the corpus's profile, ADR-0016 slice 3)
+    or the module rail default ``SYSTEM_PROMPT`` when no persona is in scope."""
+    return _ACTIVE_PERSONA.get() or SYSTEM_PROMPT
 
 
 def apply_profile(name: str) -> dict:
@@ -1428,7 +1447,7 @@ def _generate_api(user_content: str) -> dict:
     resp = anthropic.Anthropic().messages.create(
         model=MODEL,
         max_tokens=1000,
-        system=SYSTEM_PROMPT,
+        system=system_prompt(),
         messages=[{"role": "user", "content": user_content}],
     )
     return {
@@ -1512,7 +1531,7 @@ def _generate_claude_code(user_content: str) -> dict:
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
     try:
         proc = subprocess.run(
-            ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
+            ["claude", "-p", user_content, "--append-system-prompt", system_prompt(),
              "--output-format", "json", "--setting-sources", "user"],
             capture_output=True, text=True, timeout=CLAUDE_CODE_TIMEOUT_S,
             cwd=headless_cwd(),
@@ -1612,6 +1631,7 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
     before (the ``top-k=`` line prints the effective ``top_k``)."""
     # scope a per-call corpus override to this request only
     token = _ACTIVE_COLLECTION.set(collection) if collection else None
+    persona_token = None
     try:
         import time as _time
 
@@ -1627,6 +1647,21 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
         pinned = bool(pin)
         corpus = active_collection()
         stages: list[dict] = []
+
+        # Persona follows the corpus (ADR-0016 slice 3): resolve the profile for this
+        # collection and answer in its voice, resetting it in the `finally` below.
+        # profile_for_collection reads profiles.yaml each call (small file); do NOT
+        # memoise by (overlay mtime) now — leave that to a later slice if it bites.
+        # Any failure falls back to no persona (the rail SYSTEM_PROMPT); never raises.
+        try:
+            from a2a_agent.profiles import profile_for_collection, profile_persona
+            _profile = profile_for_collection(corpus)
+            if _profile is not None:
+                _persona = profile_persona(_profile)
+                if _persona is not None:
+                    persona_token = _ACTIVE_PERSONA.set(_persona)
+        except Exception as exc:  # profile lookup is best-effort — never fail a request
+            logger.debug("persona lookup failed for corpus %r: %s", corpus, exc)
 
         def _emit(stage, ms, telemetry, detail, data, hits=None, scoring=None):
             """Append a stage frame and, if a listener is attached, hand it the same
@@ -1779,6 +1814,8 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
                 "scoring": scoring, "mode": mode, "mode_effective": mode_effective,
                 "k": top_k, "pinned": pinned}
     finally:
+        if persona_token is not None:
+            _ACTIVE_PERSONA.reset(persona_token)
         if token is not None:
             _ACTIVE_COLLECTION.reset(token)
 

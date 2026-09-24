@@ -49,3 +49,15 @@ Feature: HTTP API
     When I GET "/health" with Origin "https://evil.example"
     Then the response status is 200
     And the response has no CORS allow-origin header
+
+  Scenario: The /options examples follow the default corpus (hotel)
+    Given the corpora allow-list is "hotel,edi"
+    When I GET "/options"
+    Then the response status is 200
+    And the first example mentions "late checkout"
+
+  Scenario: The /options examples follow the default corpus (rail)
+    Given the corpora allow-list is "edi,hotel"
+    When I GET "/options"
+    Then the response status is 200
+    And the first example mentions "997"
