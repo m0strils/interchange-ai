@@ -315,3 +315,47 @@ identical per-row ranks, brain control columns match Slice A, `context@4` and
 under their ceilings, and all three graded live answers pass. Otherwise record the
 numbers, **revert the wiring (Slice D) in one commit, and keep Slices A–C** (the
 frozen set, the fixed budget, the assembler, and the eval).
+
+## Update 2026-09-24 — slice C measured; stop rule fired; expansion rule revised
+Slice C (c82fc97) built `context@k`, `note@k` and the chars counter-metric on the assembled
+context. Ranking columns are identical to the control across all runs (assembly is after
+ranking, now proven, not asserted). **Measured** on the frozen set, profile default
+(`hybrid+rerank`, `notes`, budget 20,000, cap 16,000):
+
+| expectation | pre-registered | measured | result |
+|---|---|---|---|
+| context@4, both whole-note rows passing | ≥ 6/7 | 4/7, both whole-note rows miss | **fail** |
+| note@4 | ≥ 5 of eligible | 17/24 | pass |
+| mean assembled chars | < 14,000 | 16,702 (max 20,000) | **fail** |
+
+Both whole-note misses carry `budget_exhausted` on notes under the cap (the 1,978-char
+decision note and the 4,918-char reference note, both at source rank 3). Knob variants
+run on the eval before touching the design:
+
+| budget | cap | context@4 | note@4 | mean chars |
+|---:|---:|---:|---:|---:|
+| 20,000 | 16,000 | 4/7 | 17/24 | 16,702 |
+| 24,000 | 16,000 | 5/7 | 20/24 | 18,845 |
+| 20,000 | 8,000 | 4/7 | 10/15 | 16,702 |
+| 20,000 | 6,000 | 4/7 | 8/13 | 16,702 |
+| 12,000 | 6,000 | 4/7 | 7/13 | 10,865 |
+| 24,000 | 6,000 | 5/7 | 9/13 | 18,845 |
+
+Mean chars sit at the budget whatever the cap. **Reading:** the fault is the expansion
+rule, not a knob. Pass 2 lets the first hits spend the whole budget — a big note is
+included whole up to the cap, and an over-cap note's neighbour fallback "widens while
+budget remains" — so a small target note at rank 3 never gets its turn. The corpus
+made this vivid: the largest brain note (20,160 chars) is this ADR's own plan note, which
+quotes the eval questions and outranks the notes the questions are about. The corpus stays
+frozen; the self-referential trap is recorded, not edited away.
+
+**Revised rule (slice B′), pre-registered before the code moves.** Pass 1 unchanged
+(seed every hit). Pass 2, *fair share*: each hit gets `(budget − seeded) / n_hits`; in
+rank order a hit takes its whole note if the note is under the cap and fits its share,
+else neighbours bounded to ±1 chunk within its share. Pass 3, *redistribute*: the unspent
+remainder, in rank order, first completes notes that now fit whole, then widens neighbours
+to ±2. Neighbours never widen beyond ±2. Expectations unchanged: context@4 ≥ 6/7 with both
+whole-note rows passing, note@4 ≥ 5 of eligible, mean chars < 14,000. The checklist-memory
+row is `not_retrieved` (a ranking miss) and is the one row assembly cannot recover, so 6/7
+is the ceiling. Knobs unchanged (20,000 / 16,000). Slice D stays unstarted until the
+revised assembler meets the expectations on the eval.
