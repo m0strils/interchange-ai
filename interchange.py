@@ -103,6 +103,8 @@ _ACTIVE_PERSONA: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 MODEL = os.environ.get("INTERCHANGE_MODEL", "claude-sonnet-5")
 CHUNK_CHARS = 1200          # max section-body size before a section is windowed
 CHUNK_OVERLAP = 150
+LEAD_MERGE_CHARS = 600      # max combined lead-run size folded into the first body
+                            # chunk at ingest (ADR-0017 lead-chunk merge)
 TOP_K = 4
 RRF_K = 60                  # Reciprocal Rank Fusion constant (Cormack et al.)
 DENSE_POOL = 20            # dense candidate-pool size fed to fusion (ADR-0007/0014)
@@ -263,6 +265,50 @@ def mark_lead(chunks: list[dict]) -> list[dict]:
             c["lead"] = False
             broken = True
     return out
+
+
+def merge_lead_chunks(chunks: list[dict], limit: int = LEAD_MERGE_CHARS) -> list[dict]:
+    """Fold a note's LEAD run into its first body chunk at ingest (ADR-0017), so the
+    topic-token-dense frontmatter/H1 chunks travel WITH the first real section instead
+    of outranking it. Pure: consumes ``mark_lead`` output (dicts with ``text``,
+    ``section``, ``level``, ``lead``) and returns NEW dicts, never mutating the inputs.
+
+    Take the leading run of ``lead == True`` chunks. If a non-lead chunk follows AND the
+    combined length of the lead texts (sum of ``len(text)``) is ``<= limit``, produce ONE
+    merged chunk in place of the lead run + first body chunk: ``text`` is the lead texts
+    joined by a blank line, then a blank line, then the body text; ``section`` and
+    ``level`` are the body chunk's; ``lead`` is False and ``merged_lead`` is True. Every
+    other chunk passes through unchanged with ``merged_lead: False``.
+
+    When no non-lead chunk follows (a title-only note, a PDF-style preamble-only
+    document) or the lead run exceeds ``limit``, the chunks are returned unchanged apart
+    from adding ``merged_lead: False``. The merged chunk is NOT re-windowed even if it
+    exceeds ``CHUNK_CHARS`` — keeping the lead with the first section is the point. An
+    empty list returns an empty list."""
+    out = [dict(c) for c in chunks]
+    for c in out:
+        c["merged_lead"] = False
+    # length of the leading run of lead chunks
+    run = 0
+    for c in out:
+        if c.get("lead") is True:
+            run += 1
+        else:
+            break
+    body_follows = run < len(out)
+    lead_len = sum(len(c.get("text", "")) for c in out[:run])
+    if run == 0 or not body_follows or lead_len > limit:
+        return out
+    body = out[run]
+    lead_texts = [c.get("text", "") for c in out[:run]]
+    merged = {
+        "text": "\n\n".join(lead_texts + [body.get("text", "")]),
+        "section": body.get("section"),
+        "level": body.get("level"),
+        "lead": False,
+        "merged_lead": True,
+    }
+    return [merged] + out[run + 1:]
 
 
 def _extract_pdf(path: str) -> str:
@@ -573,6 +619,7 @@ def build_index():
     skipped = 0
     secret_skipped = 0
     unresolved = 0
+    lead_merged = 0
     for path in files:
         name = rel_source(DOCS_DIR, pathlib.Path(path))
         text = _read_document(str(path))
@@ -605,11 +652,16 @@ def build_index():
         title = posixpath.basename(name)
         if title.endswith(".md"):
             title = title[:-3]
-        for j, ch in enumerate(mark_lead(chunk(text))):
+        note_chunks = merge_lead_chunks(mark_lead(chunk(text)))
+        if any(ch.get("merged_lead") for ch in note_chunks):
+            lead_merged += 1
+        for j, ch in enumerate(note_chunks):
             ids.append(f"{name}:{j}")
             docs.append(ch["text"])
             metas.append({"source": name, "chunk": j, "section": ch["section"],
-                          "links": links_meta, "title": title, "lead": ch["lead"]})
+                          "links": links_meta, "title": title,
+                          "lead": bool(ch["lead"]),
+                          "merged_lead": bool(ch.get("merged_lead", False))})
     col.add(ids=ids, documents=docs, metadatas=metas)
     indexed = len(files) - skipped - secret_skipped
     secs = time.monotonic() - started
@@ -618,7 +670,8 @@ def build_index():
         f" in {secs:.1f} s"
         f" ({skipped} skipped: no extractable text; "
         f"{secret_skipped} skipped: credential pattern"
-        f"; {unresolved} wikilinks unresolved)"
+        f"; {unresolved} wikilinks unresolved"
+        f"; {lead_merged} lead chunks merged)"
     )
     # A rebuild that lands the SAME chunk count is invisible to a long-running
     # snapshot cache (ADR-0016 consequence: corpus_snapshot keys on count). Drop

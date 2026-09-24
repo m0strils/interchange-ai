@@ -379,3 +379,86 @@ def test_mark_lead_empty_list_returns_empty_list():
     from interchange import mark_lead
 
     assert mark_lead([]) == []
+
+
+# --- merge_lead_chunks(): lead-chunk merge at ingest (contract, ADR-0017) ---
+def test_merge_lead_chunks_empty_list_returns_empty_list():
+    from interchange import merge_lead_chunks
+
+    assert merge_lead_chunks([]) == []
+
+
+def test_merge_lead_chunks_does_not_mutate_inputs_and_returns_new_dicts():
+    """``merge_lead_chunks`` returns new dicts and never mutates the inputs."""
+    from interchange import merge_lead_chunks
+
+    inputs = [{"text": "front", "section": "preamble", "level": 0, "lead": True},
+              {"text": "body", "section": "Body", "level": 2, "lead": False}]
+    out = merge_lead_chunks(inputs)
+    assert "merged_lead" not in inputs[0], "inputs must not be mutated"
+    assert out[0] is not inputs[0]
+
+
+def test_merge_lead_chunks_folds_lead_run_into_first_body():
+    """A small preamble+H1 lead run followed by a body merges into ONE chunk that
+    keeps the body's section/level, carries lead False / merged_lead True, and joins
+    the texts lead-first with blank lines between."""
+    from interchange import merge_lead_chunks
+
+    out = merge_lead_chunks([
+        {"text": "type: note", "section": "preamble", "level": 0, "lead": True},
+        {"text": "# Title\nintro", "section": "Title", "level": 1, "lead": True},
+        {"text": "## Body\nreal content", "section": "Body", "level": 2, "lead": False},
+    ])
+    assert len(out) == 1
+    m = out[0]
+    assert m["section"] == "Body" and m["level"] == 2
+    assert m["lead"] is False and m["merged_lead"] is True
+    assert m["text"] == "type: note\n\n# Title\nintro\n\n## Body\nreal content"
+
+
+def test_merge_lead_chunks_over_limit_left_alone_but_flagged():
+    """A lead run larger than the limit is not merged; every chunk just gains
+    ``merged_lead: False`` and the count is unchanged."""
+    from interchange import merge_lead_chunks
+
+    chunks = [
+        {"text": "x" * 400, "section": "preamble", "level": 0, "lead": True},
+        {"text": "y" * 400, "section": "Title", "level": 1, "lead": True},
+        {"text": "body", "section": "Body", "level": 2, "lead": False},
+    ]
+    out = merge_lead_chunks(chunks, limit=600)
+    assert len(out) == 3
+    assert [c["lead"] for c in out] == [True, True, False]
+    assert all(c["merged_lead"] is False for c in out)
+
+
+def test_merge_lead_chunks_no_body_following_is_untouched():
+    """A lead run with no body chunk after it (title-only note, PDF preamble) is
+    returned unchanged apart from ``merged_lead: False``."""
+    from interchange import merge_lead_chunks
+
+    out = merge_lead_chunks([
+        {"text": "just a title", "section": "Title", "level": 1, "lead": True},
+    ])
+    assert len(out) == 1
+    assert out[0]["lead"] is True and out[0]["merged_lead"] is False
+
+
+def test_merge_rail_corpus_chunk_count_before_and_after():
+    """The real rail/EDI corpus (``docs/``, discovered exactly as the eval scores it)
+    holds 12 chunks before the merge and 10 after — two notes fold a small lead run
+    into their first body section, one has no mergeable lead. This is the number
+    ADR-0017 records for the merge's ingest effect."""
+    from interchange import (DOCS_DIR, chunk, discover_files, mark_lead,
+                             merge_lead_chunks, _read_document)
+
+    before = after = 0
+    for path in discover_files(DOCS_DIR):
+        text = _read_document(str(path))
+        before += len(chunk(text))
+        after += len(merge_lead_chunks(mark_lead(chunk(text))))
+
+    assert before == 12
+    assert after == 10
+    assert after < before
