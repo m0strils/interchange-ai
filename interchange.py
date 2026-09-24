@@ -746,6 +746,68 @@ def rank_of_expected(retrieved_sources: list[str], expected) -> int | None:
     return None
 
 
+def _norm_section(s) -> str:
+    """Case- and whitespace-normalise a section label for comparison: lowercased,
+    inner whitespace collapsed, ends trimmed. The one normalisation every section
+    match runs through, so the golden ``expected_section`` rule reads identically
+    in the scorer, the ``--golden-add`` validator and the tests (ADR-0017)."""
+    return " ".join(str(s or "").split()).lower()
+
+
+def _section_matches(expected, section) -> bool:
+    """True iff the chunk's ``section`` label CONTAINS any of ``expected`` (a str or
+    list of str), compared case-insensitively and whitespace-normalised — the substring
+    rule an ``expected_section`` golden field is scored by (ADR-0017)."""
+    if not expected:
+        return False
+    wanted = [expected] if isinstance(expected, str) else list(expected)
+    hay = _norm_section(section)
+    return any(_norm_section(w) in hay for w in wanted if str(w).strip())
+
+
+def passage_rank(hits, expected_sources, expected_sections) -> int | None:
+    """The 1-based rank of the first hit whose SOURCE is expected AND whose SECTION
+    matches — the passage-level companion to ``rank_of_expected`` (ADR-0017). ``hits``
+    is the ordered list of ``(source, section)`` pairs a run retrieved;
+    ``expected_sources`` and ``expected_sections`` are each a str or list of str.
+    Returns None when no section is expected: passage rank is only defined for a golden
+    row that names one, so a source-only row scores source-only as before."""
+    if not expected_sections:
+        return None
+    wanted_src = ({expected_sources} if isinstance(expected_sources, str)
+                  else set(expected_sources))
+    for i, (source, section) in enumerate(hits, start=1):
+        if source in wanted_src and _section_matches(expected_sections, section):
+            return i
+    return None
+
+
+def is_lead_section(section, title=None) -> bool:
+    """True for a note's LEAD chunk — the ``preamble`` (frontmatter/intro before any
+    heading) or the H1 section whose label equals the note's title (ADR-0017). ``title``
+    is the note title ``build_index`` records (basename without ``.md``); when given, an
+    H1 section matching it counts as lead. These short, topic-token-dense chunks are the
+    ones that outrank body sections; ``lead_share`` counts them."""
+    sec = _norm_section(section)
+    if sec == "preamble":
+        return True
+    if title is not None and sec and sec == _norm_section(title):
+        return True
+    return False
+
+
+def lead_share(hits_meta, k: int) -> float:
+    """Fraction of the top-``k`` hits that are LEAD chunks (preamble or H1) — the
+    diagnostic ADR-0017's lead-chunk merge must move down. ``hits_meta`` is an ordered
+    list of chunk-metadata dicts (each with ``section`` and, ideally, ``title``);
+    returns 0.0 for an empty top-k."""
+    top = list(hits_meta)[:k]
+    if not top:
+        return 0.0
+    lead = sum(1 for m in top if is_lead_section(m.get("section"), m.get("title")))
+    return lead / len(top)
+
+
 def classify(rank: int | None, k: int) -> str:
     """Bucket a rank against the hit@k cutoff: None -> "absent", 1 -> "hit@1",
     2..k -> "hit@k", beyond k -> "near-miss" (found, but a reranker would have to
@@ -810,6 +872,24 @@ def _known_sources() -> set[str]:
         return set()
     metas = col.get(include=["metadatas"]).get("metadatas") or []
     return {m["source"] for m in metas if m and "source" in m}
+
+
+def _known_sections(source: str) -> set[str]:
+    """Every ``section`` label recorded for chunks of ``source`` in the active
+    collection — the set a ``--golden-add --section`` label is validated against
+    (ADR-0017). Reads the collection metadata the same way ``_known_sources`` does,
+    so it is stubbable in the same way; returns an empty set if the collection or the
+    source is missing."""
+    import chromadb
+
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    try:
+        col = client.get_collection(active_collection())
+    except Exception:
+        return set()
+    metas = col.get(include=["metadatas"]).get("metadatas") or []
+    return {m["section"] for m in metas
+            if m and m.get("source") == source and "section" in m}
 
 
 # --- corpus snapshot (per-collection cache) -------------------------------
@@ -1900,27 +1980,54 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
         ranks: list[int | None] = []
         results: list[dict] = []
         hits = 0
+        # passage-level scoring (ADR-0017): a row that names an expected_section also
+        # scores at the PASSAGE level — a top-k chunk whose source AND section match.
+        # `passage_rows` (b) counts the rows carrying a section; `passage_hits` (a) the
+        # ones whose passage rank lands within k. `lead_metas` accumulates every scored
+        # row's top-k chunk metadata so `lead share` is measured over the whole run.
+        passage_hits = 0
+        passage_rows = 0
+        lead_metas: list[dict] = []
         for row in scored:
             question = row["question"]
             expected = row.get("expected_source") or row.get("expected_sources")
             kind = row.get("kind")
+            expected_section = row.get("expected_section")
             # only the rerank mode reads rerank_n; keep the call shape identical to
             # slice-4 for every other mode so existing retrieve fakes are untouched.
             extra = {"rerank_n": rerank_n} if mode == "hybrid+rerank" else {}
-            sources = [m["source"] for _, m in retrieve(question, mode=mode, top_k=depth,
-                                                         pool=pool, **extra)]
+            metas = [m for _, m in retrieve(question, mode=mode, top_k=depth,
+                                            pool=pool, **extra)]
+            # source-level scoring is byte-for-byte unchanged (ADR-0014 numbers depend
+            # on it): the same source list, in the same order, from the same metas.
+            sources = [m["source"] for m in metas]
             hit = hit_at_k(sources, expected, k)
             rank = rank_of_expected(sources, expected)
             cls = classify(rank, k)
             hits += hit
             ranks.append(rank)
-            results.append({"question": question, "kind": kind, "expected": expected,
-                            "rank": rank, "class": cls, "retrieved": sources[:depth]})
+            lead_metas.extend(metas[:k])
+            result_row = {"question": question, "kind": kind, "expected": expected,
+                          "rank": rank, "class": cls, "retrieved": sources[:depth]}
+            p_rank = None
+            if expected_section:
+                passage_rows += 1
+                pairs = [(m.get("source"), m.get("section")) for m in metas]
+                p_rank = passage_rank(pairs, expected, expected_section)
+                if p_rank is not None and p_rank <= k:
+                    passage_hits += 1
+                result_row["expected_section"] = expected_section
+                result_row["passage_rank"] = p_rank
+            results.append(result_row)
             if not quiet:
                 mark = "✅" if hit else "❌"
                 rank_str = str(rank) if rank is not None else "-"
                 kind_str = f"[{kind}] " if kind else ""
-                print(f"  {mark:<3} {rank_str:<5} {kind_str}{question[:44]}")
+                p_str = ""
+                if expected_section:
+                    p_hit = "✅" if (p_rank is not None and p_rank <= k) else "❌"
+                    p_str = f" | passage {p_hit} @{p_rank if p_rank is not None else '-'}"
+                print(f"  {mark:<3} {rank_str:<5} {kind_str}{question[:44]}{p_str}")
 
         n = len(scored)
         rate = hits / n if n else 0.0
@@ -1928,6 +2035,8 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
         histogram = rank_histogram(ranks, k, depth)
         near_miss = sum(1 for r in ranks if r is not None and k < r <= depth)
         absent = histogram["absent"]
+        # lead share over every scored row's top-k, as one fraction (ADR-0017).
+        share = lead_share(lead_metas, len(lead_metas))
 
         # rerank metadata: present only when this run reranked (else null). Local
         # backends are `measured` ($0); TypeSafe is `estimated` (ADR-0004). `calls`
@@ -1946,6 +2055,8 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             "hit_at_1": hit_at_1, "histogram": histogram, "near_miss": near_miss,
             "absent": absent, "mode": mode, "corpus": corpus, "golden": str(golden_path),
             "depth": depth, "pool": pool, "rerank": rerank_meta,
+            "passage_at_k": passage_hits, "passage_rows": passage_rows,
+            "lead_share": share,
             "skipped": skipped, "results": results,
         }
 
@@ -1957,6 +2068,13 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
         if not quiet:
             print(f"\n  hit@1 = {hit_at_1}/{n}")
             print(f"  hit@{k} = {hits}/{n} = {rate:.1%}")
+            if passage_rows:
+                print(f"  passage@{k} = {passage_hits}/{passage_rows}  "
+                      f"(rows carrying an expected_section)")
+            else:
+                print(f"  passage@{k} = n/a  (no row carries an expected_section)")
+            print(f"  lead share = {share:.2f}  "
+                  f"(fraction of top-{k} hits that are preamble/H1 chunks)")
             print(f"  rank histogram: {histogram}")
             print(f"  near-miss (expected within top-{depth} but outside top-{k}) = {near_miss}"
                   f"  <- ADR-0007 reranker trigger (build the reranker when this is > 0)")
@@ -1969,7 +2087,7 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
 
 
 def golden_add(golden_path, question: str, expected: list[str], kind: str,
-               note: str | None, collection: str) -> dict:
+               note: str | None, collection: str, sections=None) -> dict:
     """Append one *validated* row to a golden set — eval-as-you-go (ADR-0016 slice 5).
 
     A miss becomes a golden row only if its expected source is actually indexed, so a
@@ -1979,17 +2097,26 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
     ``question`` — matched case-insensitively and whitespace-normalised against the rows
     already in ``golden_path`` — is refused the same way. The appended row uses the same
     schema as the existing rows: ``expected_source`` for a single source, else
-    ``expected_sources`` (a list), plus ``kind`` and, when given, ``note``. The golden
-    file is created (with its parent) when absent. Returns the appended row."""
+    ``expected_sources`` (a list), plus ``kind`` and, when given, ``note``. When
+    ``sections`` is given (a list of section labels, ADR-0017), each expected source
+    must have an indexed chunk whose ``section`` matches every label (same substring,
+    case-insensitive rule as the eval), else a plain ``SystemExit`` names the missing
+    section and source; the appended row then carries ``expected_section`` — a string
+    for one label, a list for several. The golden file is created (with its parent)
+    when absent. Returns the appended row."""
     import json as _json
 
     golden_path = pathlib.Path(golden_path)
     expected = list(expected)
+    sections = list(sections) if sections else []
 
-    # 1) every expected source must be indexed in this collection.
+    # 1) every expected source must be indexed in this collection; when sections are
+    #    named, read each source's section labels in the same collection context.
     token = _ACTIVE_COLLECTION.set(collection) if collection else None
     try:
         known = _known_sources()
+        section_by_source = ({src: _known_sections(src) for src in expected}
+                             if sections else {})
     finally:
         if token is not None:
             _ACTIVE_COLLECTION.reset(token)
@@ -1999,6 +2126,16 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
             f"expected source {unknowns[0]!r} is not indexed in collection "
             f"{collection!r}; reindex the corpus or fix the path"
         )
+
+    # 1b) each named section must appear on at least one indexed chunk of each source.
+    for src in expected:
+        have = section_by_source.get(src, set())
+        for sec in sections:
+            if not any(_section_matches(sec, label) for label in have):
+                sys.exit(
+                    f"section {sec!r} is not on any indexed chunk of {src!r} in "
+                    f"collection {collection!r}; list the note's sections or fix the label"
+                )
 
     # 2) reject a duplicate question (exact match, case-insensitive, ws-normalised).
     def _norm(q: str) -> str:
@@ -2019,6 +2156,8 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
         row["expected_source"] = expected[0]
     else:
         row["expected_sources"] = expected
+    if sections:
+        row["expected_section"] = sections[0] if len(sections) == 1 else sections
     row["kind"] = kind
     if note:
         row["note"] = note
@@ -2092,6 +2231,11 @@ def main():
     ap.add_argument("--kind", choices=["exact", "paraphrase", "linked", "duplicate-title"],
                     default="paraphrase", metavar="KIND",
                     help="the retrieval facet a --golden-add row probes (default: paraphrase)")
+    ap.add_argument("--section", action="append", metavar="NAME",
+                    help="an expected section label for --golden-add (repeatable; ADR-0017). "
+                         "Each expected source must have an indexed chunk whose section "
+                         "matches. Writes expected_section — a string for one, a list for "
+                         "several")
     ap.add_argument("--note", metavar="TEXT",
                     help="an optional annotation stored on the --golden-add row")
     args = ap.parse_args()
@@ -2119,7 +2263,7 @@ def main():
         if not args.question or not args.expected:
             ap.error("--golden-add requires --question and at least one --expected")
         row = golden_add(golden, args.question, args.expected, args.kind, args.note,
-                         args.corpus or COLLECTION)
+                         args.corpus or COLLECTION, sections=args.section)
         import json as _json
 
         print(_json.dumps(row))
@@ -2158,13 +2302,20 @@ def main():
             print(f"Retrieval eval — mode comparison over {n} answerable question(s) "
                   f"(k={args.k}, depth={args.depth}, pool={args.pool})\n")
             hk = f"hit@{args.k}"
-            print(f"  {'mode':<14} {'hit@1':>9} {hk:>9} {'near-miss':>11} {'absent':>9}")
-            print(f"  {'-' * 14} {'-' * 9} {'-' * 9} {'-' * 11} {'-' * 9}")
+            pk = f"passage@{args.k}"
+            print(f"  {'mode':<14} {'hit@1':>9} {hk:>9} {pk:>11} {'near-miss':>11} "
+                  f"{'absent':>9} {'lead':>6}")
+            print(f"  {'-' * 14} {'-' * 9} {'-' * 9} {'-' * 11} {'-' * 11} "
+                  f"{'-' * 9} {'-' * 6}")
             for m in modes:
                 s = summaries[m]
                 h1 = f"{s['hit_at_1']}/{s['n']}"
                 hk_col = f"{s['hits']}/{s['n']}"
-                print(f"  {m:<14} {h1:>9} {hk_col:>9} {s['near_miss']:>11} {s['absent']:>9}")
+                pk_col = (f"{s['passage_at_k']}/{s['passage_rows']}"
+                          if s['passage_rows'] else "n/a")
+                lead_col = f"{s['lead_share']:.2f}"
+                print(f"  {m:<14} {h1:>9} {hk_col:>9} {pk_col:>11} {s['near_miss']:>11} "
+                      f"{s['absent']:>9} {lead_col:>6}")
             if "hybrid+rerank" in modes:
                 label = "estimated" if RERANK_BACKEND == "typesafe" else "measured"
                 print(f"\n  rerank backend: {RERANK_BACKEND} "

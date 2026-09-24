@@ -71,9 +71,18 @@ per-question table plus the aggregate.
   number**: build the deferred reranker when it is `> 0` on the hybrid run, and keep it
   deferred (for a measured reason, not an assumed one) while it is `0`.
 - **skipped** — the count of unanswerable rows that carry no retrieval ground truth.
-- With `--mode all`, a comparison table: `mode | hit@1 | hit@k | near-miss | absent`.
-  On the seed corpus this reproduces ADR-0007's measured numbers — hybrid `14/14`,
-  dense-only `13/14` — so the ablation is verifiable, not asserted.
+- **passage@k** (ADR-0017) — `passage@k = a/b`, where `b` is the number of rows carrying
+  an `expected_section` and `a` is how many of those had a top-`k` chunk whose source
+  **and** section matched. Printed `n/a` when no row carries a section.
+- **lead share** — `lead share = x.xx`, the fraction of all scored rows' top-`k` hits
+  whose section is `preamble` or the note's H1 (title). High lead share is the symptom
+  ADR-0017's lead-chunk merge exists to move down: the retriever surfacing short
+  title/frontmatter chunks instead of the body sections that carry answers.
+- With `--mode all`, a comparison table:
+  `mode | hit@1 | hit@k | passage@k | near-miss | absent | lead`. On the seed corpus
+  this reproduces ADR-0007's measured numbers — hybrid `14/14`, dense-only `13/14` — so
+  the ablation is verifiable, not asserted (`passage@k` is `n/a` there — the seed set
+  carries no `expected_section`).
 
 ### The run log — `eval-runs.jsonl`
 
@@ -85,8 +94,12 @@ and comparable against another run *with the same pool and depth*.
 
 The return value keeps its legacy keys `{"n", "hits", "hit_at_k", "k"}` and adds
 `hit_at_1`, `histogram`, `near_miss`, `absent`, `mode`, `corpus`, `golden`, `depth`,
-`pool`, `rerank`, `skipped`, and `results`. `rerank` is `null` unless the run used
-`hybrid+rerank`, in which case it records `{backend, window, calls, telemetry}`.
+`pool`, `rerank`, `passage_at_k`, `passage_rows`, `lead_share`, `skipped`, and
+`results`. `rerank` is `null` unless the run used `hybrid+rerank`, in which case it
+records `{backend, window, calls, telemetry}`. `passage_at_k`/`passage_rows` are the
+`a`/`b` of `passage@k`, `lead_share` the run's lead-chunk fraction, and each `results`
+row that carried an `expected_section` also carries its `passage_rank` (the 1-based rank
+of the first source-and-section match, or `null`).
 
 ### Reranking — `hybrid+rerank` (ADR-0007 trigger, ADR-0014)
 
@@ -133,6 +146,15 @@ is identical** to `golden.jsonl`, with two differences a nested corpus brings:
   so the folder-qualified path is what disambiguates them.
 - `expected_sources` (a **list**) is allowed for a question whose answer could
   legitimately live in more than one note; `hit_at_k` counts a hit on *any* of them.
+- `expected_section` (optional; a **string or a list of strings**, ADR-0017) turns on
+  **passage-level** scoring for the row. A chunk matches a section when its `section`
+  metadata **contains** the string, compared **case-insensitively and with whitespace
+  normalised** (a list matches any of its entries). A row *with* `expected_section`
+  scores a `passage@k` — a top-`k` chunk whose source **and** section match — on top of
+  its source-level `hit@k`; a row **without** it scores **source-only**, exactly as
+  before. This is the metric that catches a retriever returning only a note's
+  frontmatter/title chunks: the right *file* is in the top-k (a source hit) but no chunk
+  carries the answer's *section* (a passage miss).
 - Optional `kind` and `note` fields annotate a row (e.g. the retrieval facet it probes,
   or why a source was chosen). `kind` is echoed in the per-question table and stored in
   the log; `note` is documentation for the reader. Neither affects scoring.
