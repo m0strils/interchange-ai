@@ -138,9 +138,13 @@ MODES = ("hybrid", "dense", "bm25", "hybrid+links", "hybrid+rerank")
 RERANK_BACKEND = os.environ.get("INTERCHANGE_RERANK", "cross-encoder")
 # Context assembly (ADR-0018): the unit of retrieval is not the unit of context.
 # `chunks` is today's behaviour (the default for every profile that does not opt in);
-# `notes` seeds every hit's own chunk then expands each hit to its whole note (under
-# `NOTE_MAX_CHARS`) or to its neighbours. Neighbour expansion is the internal fallback
-# of `notes`, never a third public value. Budgets are measured on the emitted string.
+# `notes` seeds every hit's own chunk then expands by FAIR SHARE (ADR-0018 slice B′):
+# each note gets an equal slice of the budget and is taken whole (under `NOTE_MAX_CHARS`)
+# or grown to its neighbours within that slice, so a small note at rank 3 is not starved
+# by a large note at rank 1; a redistribute pass then spends the unspent remainder in
+# rank order, completing notes that now fit whole and widening the rest (bounded to +/-2).
+# Neighbour expansion is the internal
+# fallback of `notes`, never a third public value. Budgets measured on the emitted string.
 CONTEXT_MODES = ("chunks", "notes")
 CONTEXT_BUDGET_CHARS = 20000   # ADR-0018: max assembled context chars, headers included
 NOTE_MAX_CHARS = 16000         # ADR-0018: a note larger than this never assembles whole
@@ -1169,11 +1173,17 @@ class Assembled:
       emitted chunks.
     - ``dropped_hits``: hits whose own chunk was not in the snapshot (0 by
       construction — the seed pass always fits — but counted anyway).
-    - ``fallbacks``: hits whose note fell back to neighbour expansion.
+    - ``fallbacks``: sources that were not included whole (ADR-0018 slice B′).
     - ``budget_hit``: a budget constraint stopped an inclusion.
     - ``secret_drops``: expansion-added chunks dropped by ``looks_like_secret``.
-    - ``reasons``: per source, one of ``whole`` / ``neighbours`` / ``seed-only`` /
-      ``note_too_big`` / ``budget_exhausted`` (empty in ``chunks`` mode).
+    - ``reasons``: per source, one of ``whole`` / ``neighbours`` / ``note_too_big`` /
+      ``share_exceeded`` / ``budget_exhausted`` / ``seed-only`` (empty in ``chunks``
+      mode). ``whole`` = every chunk of the note; ``note_too_big`` = over the cap (never
+      whole); ``share_exceeded`` = under the cap but limited by its fair share;
+      ``budget_exhausted`` = under the cap, the budget stopped it; ``neighbours`` =
+      grown to the +/-2 bound; ``seed-only`` = nothing beyond the seed and not blocked
+      by budget or cap (e.g. a note whose only neighbours were secret-dropped; a
+      one-chunk note is ``whole``).
     """
     text: str
     included: list
@@ -1206,11 +1216,16 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
     ``hits`` are the Hit dicts (``source``, ``chunk`` = chunk index, ``text``…).
     ``mode == "chunks"`` reproduces today's context byte-for-byte:
     ``"\\n\\n".join(f"[{source}]\\n{text}")`` over the hits in order. ``mode ==
-    "notes"`` runs the two-pass budgeted assembler: a seed pass includes every hit's
-    own chunk (so ``assembled ⊇ chunks`` holds by construction), then an expand pass
-    grows each hit to its whole note when it fits both the cap and the remaining
-    budget, else to its neighbours. Budget is measured on the emitted string, headers
-    included; a note that does not fit is skipped whole, never truncated.
+    "notes"`` runs the three-pass fair-share assembler (ADR-0018 slice B′): a seed pass
+    includes every hit's own chunk (so ``assembled ⊇ chunks`` holds by construction);
+    a fair-share pass gives each note ``(budget − seeded) // n_hits`` and takes it whole
+    (under the cap, no blocking secret, block within the share) else grows +/-1 within
+    the share; a redistribute pass then spends the unspent remainder in rank order,
+    completing each still-not-whole note whose rest fits the remaining budget and widening
+    the rest to +/-2 (never beyond). Budget is measured on the
+    emitted string, headers included; a note is never truncated mid-chunk (a ``whole`` is
+    all chunks or it is not whole), and expansion-added chunks still pass the credential
+    guard.
     """
     if mode not in CONTEXT_MODES:
         raise ValueError(
@@ -1277,7 +1292,10 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
             blocks.append(f"[{s}]\n{body}")
         return "\n\n".join(blocks)
 
-    # -- pass 1: seed every hit's own chunk (always fits: 4 x <= 1200 chars) --
+    # -- pass 1: seed every hit's own chunk, in rank order (the seeds are the
+    # retrieved chunks and are never dropped). Record each source's centre (its first
+    # hit's chunk) for neighbour growth and freeze the seed set for the accounting.
+    center_of: dict[str, int] = {}
     for h in hits:
         ref = (h.get("source"), int(h["chunk"]))
         if ref in text_by_ref:
@@ -1285,78 +1303,145 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
             if src not in included:
                 included[src] = set()
                 source_order.append(src)
+                center_of[src] = ref[1]
             included[src].add(ref[1])
         else:
             dropped_hits += 1
 
+    seed_set_of: dict[str, set] = {s: set(v) for s, v in included.items()}
     if len(emit(included)) > budget_chars:
         # the seeds alone already exceed the budget; they are never dropped
         # (assembled superset chunks), but record that the budget was blown.
         budget_hit = True
 
-    # -- pass 2: expand each hit to its whole note or to its neighbours -------
-    for h in hits:
-        source = h.get("source")
-        if source not in included:      # its own chunk was dropped; nothing to grow
-            continue
-        if reasons.get(source) == "whole":
-            continue                    # already fully included via an earlier hit
-        note_idxs = note_indices(source)
-        if not note_idxs:
-            continue
-        total_chars = sum(len(text_by_ref[(source, ci)]) for ci in note_idxs)
-        entered_fallback = False
+    # per-source static facts, computed once from the chunk map.
+    note_idxs_of: dict[str, list[int]] = {s: note_indices(s) for s in source_order}
+    full_of: dict[str, set] = {s: set(note_idxs_of[s]) for s in source_order}
+    over_cap_of: dict[str, bool] = {
+        s: sum(len(text_by_ref[(s, ci)]) for ci in note_idxs_of[s]) > note_max_chars
+        for s in source_order
+    }
 
-        if total_chars <= note_max_chars:
-            # whole-note candidate: seeds + every other chunk that is not a secret
-            candidate = dict((s, set(v)) for s, v in included.items())
-            for ci in note_idxs:
-                if ci in candidate[source]:
-                    continue            # already a seed — never re-added, never dropped
-                if looks_like_secret(text_by_ref[(source, ci)]):
-                    secret_drops += 1
-                    continue
-                candidate[source].add(ci)
-            if len(emit(candidate)) <= budget_chars:
-                included = candidate
-                reasons[source] = "whole"
-                continue
-            # whole note is under the cap but does not fit the remaining budget:
-            # skip it whole (never truncate mid-chunk), then try neighbours.
-            reasons[source] = "budget_exhausted"
-            budget_hit = True
-            entered_fallback = True
-        else:
-            reasons[source] = "note_too_big"
-            entered_fallback = True
+    _sec_cache: dict[tuple, bool] = {}
 
-        # neighbour widening: +/-1, +/-2, ... around the hit's chunk, budget-bounded
-        center = int(h["chunk"])
-        present = set(note_idxs)
-        added_any = False
-        max_span = max((center - min(present)), (max(present) - center), 0)
-        for d in range(1, max_span + 1):
+    def _is_secret(src: str, ci: int) -> bool:
+        key = (src, ci)
+        if key not in _sec_cache:
+            _sec_cache[key] = looks_like_secret(text_by_ref[(src, ci)])
+        return _sec_cache[key]
+
+    counted_secret: set = set()
+
+    def _consider_secret(src: str, ci: int) -> bool:
+        """``True`` iff ``(src, ci)`` is a secret; count the drop the first time the
+        chunk is considered for inclusion so one examined in both passes counts once."""
+        nonlocal secret_drops
+        if _is_secret(src, ci):
+            if (src, ci) not in counted_secret:
+                counted_secret.add((src, ci))
+                secret_drops += 1
+            return True
+        return False
+
+    def _blocking_secret(src: str) -> bool:
+        """A note is WHOLE only if no non-seed chunk is a secret (seeds are kept even
+        when secret-looking — they are the retrieved chunks and are never dropped)."""
+        seeds = seed_set_of[src]
+        return any(_is_secret(src, ci) for ci in note_idxs_of[src] if ci not in seeds)
+
+    def _block_len(src: str, idxs) -> int:
+        body = "\n\n".join(text_by_ref[(src, ci)] for ci in sorted(idxs))
+        return len(f"[{src}]\n{body}")
+
+    def _fits_budget(src: str, new_idxs: set) -> bool:
+        trial = dict((s, set(v)) for s, v in included.items())
+        trial[src] = set(new_idxs)
+        return len(emit(trial)) <= budget_chars
+
+    added_pass2: dict[str, bool] = {}
+    added_pass3: dict[str, bool] = {}
+    budget_blocked: dict[str, bool] = {}
+
+    def _widen(src: str, per_source_cap: int, pass3: bool) -> None:
+        """Grow SRC by neighbours around its centre, bounded to +/-1 (fair-share pass)
+        or +/-2 (redistribute pass). A candidate is added only if it is a real,
+        not-yet-included, non-secret chunk that fits the whole budget AND keeps the
+        source's own block within ``per_source_cap`` (its share). A candidate the
+        budget forbids records ``budget_blocked``; one only its share forbids does not
+        (the fair split, not the budget, stopped it), and the +/-2 ceiling is a policy
+        bound, never a budget stop — so neither sets ``budget_exhausted`` on its own."""
+        nonlocal budget_hit
+        center = center_of[src]
+        full = full_of[src]
+        for d in range(1, (2 if pass3 else 1) + 1):
             for cand in (center - d, center + d):
-                if cand not in present or cand in included[source]:
+                if cand not in full or cand in included[src]:
                     continue
-                if looks_like_secret(text_by_ref[(source, cand)]):
-                    secret_drops += 1
+                if _consider_secret(src, cand):
                     continue
-                trial = dict((s, set(v)) for s, v in included.items())
-                trial[source].add(cand)
-                if len(emit(trial)) <= budget_chars:
-                    included = trial
-                    added_any = True
-                else:
+                grown = set(included[src]) | {cand}
+                if not _fits_budget(src, grown):
+                    budget_blocked[src] = True
                     budget_hit = True
-        if entered_fallback:
-            fallbacks += 1
-        # `note_too_big` / `budget_exhausted` explain WHY the whole note was not
-        # taken and win over the generic widen labels; the `neighbours` / `seed-only`
-        # branch is the default for any widen path that is neither (kept live for the
-        # eval and future paths).
-        if reasons.get(source) not in ("note_too_big", "budget_exhausted"):
-            reasons[source] = "neighbours" if added_any else "seed-only"
+                    continue
+                if _block_len(src, grown) > per_source_cap:
+                    continue            # its fair share is spent — not a budget stop
+                included[src].add(cand)
+                if pass3:
+                    added_pass3[src] = True
+                else:
+                    added_pass2[src] = True
+
+    # -- pass 2: fair share. Each note's slice of the post-seed budget; take the whole
+    # note if it is under the cap, has no blocking secret and its block fits the slice,
+    # else grow +/-1 within the slice. Sources sharing one note are handled once (the
+    # denominator is the distinct hit-sources; a shared source is never widened twice).
+    n_hits = len(source_order)
+    seeded_chars = len(emit(included))
+    share = (budget_chars - seeded_chars) // n_hits if n_hits else 0
+    for src in source_order:
+        if included[src] == full_of[src]:
+            continue                    # nothing to add (e.g. a one-chunk note)
+        if (not over_cap_of[src] and not _blocking_secret(src)
+                and _block_len(src, full_of[src]) <= share
+                and _fits_budget(src, full_of[src])):
+            included[src] = set(full_of[src])
+            continue
+        _widen(src, share, pass3=False)
+
+    # -- pass 3: redistribute the unspent remainder. Pass 2 already gave every note its
+    # fair slice and completed the ones that fit it, so a small note at rank 3 is no
+    # longer starved by rank 1; pass 3 now spends what is left. In rank order, complete
+    # any not-yet-whole note whose rest fits the remaining budget, else widen it to +/-2.
+    # ``_fits_budget`` measures the remainder live, so an early completion is spent before
+    # the next source is weighed. The +/-2 ceiling is a hard bound; the budget — not that
+    # bound and not the cap — is what an under-cap note records as ``budget_exhausted``.
+    for src in [s for s in source_order if included[s] != full_of[s]]:
+        if not over_cap_of[src] and not _blocking_secret(src):
+            if _fits_budget(src, full_of[src]):
+                included[src] = set(full_of[src])
+                continue
+            budget_blocked[src] = True      # the budget, not the cap, blocks wholeness
+            budget_hit = True
+        _widen(src, budget_chars, pass3=True)
+
+    # -- final reasons (authoritative): the cap forbids wholeness outright; else all
+    # chunks present is whole; else the budget, then the +/-2 widen, then the fair
+    # share, then nothing-beyond-seed, each explains why the note is not whole.
+    for src in source_order:
+        if over_cap_of[src]:
+            reasons[src] = "note_too_big"
+        elif included[src] == full_of[src]:
+            reasons[src] = "whole"
+        elif budget_blocked.get(src):
+            reasons[src] = "budget_exhausted"
+        elif added_pass3.get(src):
+            reasons[src] = "neighbours"
+        elif added_pass2.get(src):
+            reasons[src] = "share_exceeded"
+        else:
+            reasons[src] = "seed-only"
+    fallbacks = sum(1 for s in source_order if reasons.get(s) != "whole")
 
     text = emit(included)
     included_list = [(s, ci) for s in source_order for ci in sorted(included.get(s, ()))]

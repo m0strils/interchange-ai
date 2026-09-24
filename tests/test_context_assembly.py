@@ -50,6 +50,30 @@ def test_budget_exhausted_skips_whole():
 
 
 @scenario("context_assembly.feature",
+          "Fair share lets a small note at rank 3 be included whole beneath large notes")
+def test_fair_share_small_note_rank_three():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "Neighbours never widen beyond plus or minus two")
+def test_neighbours_never_beyond_pm2():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "Redistribution completes a note that missed its share")
+def test_redistribution_completes_note():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "Budget exhaustion is reported only when the budget stopped a source")
+def test_budget_exhaustion_only_when_budget_stopped():
+    pass
+
+
+@scenario("context_assembly.feature",
           "no chunk is included twice when two hits share a source")
 def test_no_chunk_twice():
     pass
@@ -229,6 +253,21 @@ def budget_was_hit(context):
 @then(parsers.parse('the reason for "{source}" is "{reason}"'))
 def reason_for_source(context, source, reason):
     assert context["result"].reasons.get(source) == reason
+
+
+@then(parsers.parse('the reason for "{source}" is not "{reason}"'))
+def reason_not_for_source(context, source, reason):
+    assert context["result"].reasons.get(source) != reason
+
+
+@then("the budget was not hit")
+def budget_not_hit(context):
+    assert context["result"].budget_hit is False
+
+
+@then(parsers.parse("the assembled chars are under {n:d}"))
+def assembled_chars_under(context, n):
+    assert context["result"].chars < n
 
 
 @then(parsers.parse('the context has one "{source}" header'))

@@ -54,6 +54,52 @@ Feature: Context assembly with a budget (ADR-0018)
     And only 1 chunk of "b.md" is included
     And no included chunk text is truncated
 
+  # A small note at rank 3 is included whole even when the large notes above it cannot
+  # be (they exceed the cap): the fair-share pass gives the small note its whole in
+  # pass 2 rather than letting rank 1 spend the budget first (ADR-0018 slice B').
+  Scenario: Fair share lets a small note at rank 3 be included whole beneath large notes
+    Given a note "a.md" with 20 chunks of 1000 characters
+    And a note "b.md" with 18 chunks of 1000 characters
+    And a note "c.md" with 2 chunks of 900 characters
+    And a hit into "a.md" chunk 0
+    And a hit into "b.md" chunk 0
+    And a hit into "c.md" chunk 0
+    When I assemble the context in "notes" mode with budget 20000 and note-max 16000
+    Then the reason for "c.md" is "whole"
+    And the reason for "a.md" is not "whole"
+    And the reason for "b.md" is not "whole"
+    And more than one chunk of "a.md" is included
+    And more than one chunk of "b.md" is included
+    And the assembled chars are under 20000
+
+  Scenario: Neighbours never widen beyond plus or minus two
+    Given a note "big.md" with 30 chunks of 1000 characters
+    And a hit into "big.md" chunk 15
+    When I assemble the context in "notes" mode with budget 100000 and note-max 20000
+    Then only 5 chunk of "big.md" is included
+    And the reason for "big.md" is "note_too_big"
+    And the budget was not hit
+
+  Scenario: Redistribution completes a note that missed its share
+    Given a note "tiny.md" with 1 chunk of 200 characters
+    And a note "mid.md" with 8 chunks of 500 characters
+    And a hit into "tiny.md" chunk 0
+    And a hit into "mid.md" chunk 0
+    When I assemble the context in "notes" mode with budget 6000 and note-max 6000
+    Then the reason for "tiny.md" is "whole"
+    And the reason for "mid.md" is "whole"
+    And more than one chunk of "mid.md" is included
+
+  Scenario: Budget exhaustion is reported only when the budget stopped a source
+    Given a note "a.md" with 1 chunk of 500 characters
+    And a note "b.md" with 3 chunks of 200 characters
+    And a hit into "a.md" chunk 0
+    And a hit into "b.md" chunk 0
+    When I assemble the context in "notes" mode with budget 800 and note-max 800
+    Then the reason for "b.md" is "budget_exhausted"
+    And the budget was hit
+    And only 1 chunk of "b.md" is included
+
   Scenario: no chunk is included twice when two hits share a source
     Given a note "n.md" with chunks "c0, c1, c2"
     And a hit into "n.md" chunk 0
