@@ -117,3 +117,12 @@ Claude Code 2.1.267 documents both `--strict-mcp-config` and `--tools`. Telemetr
 unaffected — this is the runtime's **tool surface**, not its usage accounting; it is
 recorded here because it is the direct continuation of the 2026-09-22 headless-hygiene
 finding on the same `claude -p` runtime.
+
+**Confirmed 2026-09-23 (slice 1 landed, merge 8a5b2c9).** The RAG engine now passes
+`--strict-mcp-config` and `--tools ""` (an empty tool list is the documented
+"disable all tools" form in Claude Code 2.1.267; verified once at $0: `is_error`
+false, no permission denials, one turn); the subscription agent passes
+`--strict-mcp-config` so only its `--mcp-config` server loads. **Measured** on the
+same question, same corpus, same engine: the headless session's reported input
+fell from 31,880 to 9,851 tokens and the answer no longer mentions connectors.
+Offline scenarios pin the argv (`features/headless_hygiene.feature`).

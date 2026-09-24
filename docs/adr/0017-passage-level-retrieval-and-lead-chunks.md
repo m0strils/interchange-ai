@@ -117,3 +117,18 @@ ADR-0014 and ADR-0016 recorded theirs:
 - **Rebuild seconds** for the full reindex the merge forces.
 - The **live five-practices question** answering with actual practices **and
   citations**, not just naming the right notes.
+
+## Update 2026-09-23 — metric built, baseline recorded (slices 0-2)
+Slice 2 landed `expected_section`, `passage@k` and `lead share` (296 tests, then 301
+after the slice-1 merge). The brain golden set has 25 rows, 6 with sections. **Measured**
+baseline before any retrieval change (k=4, pool 20, rerank_n 30, cross-encoder):
+
+| mode | hit@1 | hit@4 | passage@4 | lead share |
+|---|---:|---:|---:|---:|
+| hybrid+rerank (profile default) | 19/25 | 23/25 | 3/6 | 0.12 |
+| hybrid (control) | 20/25 | 25/25 | 3/6 | 0.14 |
+
+The five-practices row is a source hit at rank 1 and a passage miss in both modes, as is
+the EventBridge row; the memory row passes under hybrid and misses under rerank, the
+options row the reverse. Live after slice 1: the answer still names the notes and not
+the practices, now without connector chatter. This table is what slice 3 must move.
