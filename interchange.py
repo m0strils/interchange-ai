@@ -2267,12 +2267,17 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
                   top_k: int = TOP_K, rerank_backend: str | None = None,
                   pin: list | None = None, context: str | None = None,
                   budget_chars: int | None = None, note_max_chars: int | None = None,
-                  on_event=None, cancel=None) -> dict:
+                  on_event=None, cancel=None, audit: bool = True) -> dict:
     """Run the RAG pipeline and return the governed result as structured data, now
     with the scored evidence, the stage timeline and the retrieval options the web
     workbench needs (slice 2). Superset dict:
     ``{text, answer_text, grounded, sources, blocked, engine, model, cost_usd,
     telemetry, hits, stages, scoring, mode, mode_effective, k, pinned, context}``.
+    ``context`` is the mode-independent assembly telemetry block. On grade calls
+    (``audit=False``) the dict carries one extra key, ``context_text`` — the exact
+    assembled reference text the engine saw (``assembled.text``), what the ADR-0008
+    judge grades against; it is kept OFF the audited path so the HTTP surfaces, which
+    mirror this dict into a schema that forbids extra keys, are unaffected.
 
     ``answer()`` is the string wrapper over this; non-CLI surfaces want the verdict
     (and the evidence) alongside the text rather than parsing it out of prose.
@@ -2284,6 +2289,9 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
     the same way (explicit > profile > default; clamped by policy; forced to ``chunks``
     when pinned or on any resolution failure). ``sources``/grounding/citation/audit
     follow the INCLUDED set; the mode-independent ``context`` block reports the assembly.
+    ``audit=False`` runs the identical governed pipeline but writes no audit row — for
+    grade runs (ADR-0008), which must not skew the per-request ``--audit`` dashboard;
+    the returned record is unchanged. Every non-grade call site keeps the default.
     A non-None ``rerank_backend`` runs the internal ``hybrid+rerank`` mode. ``pin`` (a
     list of ``{id, token}``)
     re-asks grounded on already-retrieved chunks via ``fetch_chunks`` instead of
@@ -2297,8 +2305,10 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
     token = _ACTIVE_COLLECTION.set(collection) if collection else None
     persona_token = None
     try:
+        write_audit = audit  # capture the flag before the import rebinds `audit`
         import time as _time
 
+        import enterprise as _ent
         from enterprise import (
             GuardrailViolation,
             audit,
@@ -2306,6 +2316,23 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
             guard_input,
             guard_output,
         )
+
+        def _record(**kw):
+            """Write a governance record via ``enterprise.audit`` — unless this is a
+            grade run (``audit=False``), which wants the byte-identical returned record
+            but must not skew the per-request ``--audit`` dashboard (grade runs have
+            their own ``eval/grade-runs.jsonl``). To keep the record identical we still
+            build it through ``audit`` and only send its single append to the null sink.
+            ``audit=False`` is set solely by the offline, sequential grade judge; no
+            concurrent surface uses it, so the brief ``AUDIT_PATH`` swap is safe."""
+            if write_audit:
+                return audit(**kw)
+            saved = _ent.AUDIT_PATH
+            try:
+                _ent.AUDIT_PATH = pathlib.Path(os.devnull)
+                return audit(**kw)
+            finally:
+                _ent.AUDIT_PATH = saved
 
         pinned = bool(pin)
         corpus = active_collection()
@@ -2351,10 +2378,10 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
                 on_event(payload)
 
         def _cancelled(sources=None, hits=None, scoring=None):
-            rec = audit(question=question, model=MODEL, sources=sources or [],
-                        in_tokens=0, out_tokens=0, latency_ms=0, grounded=False,
-                        blocked="cancelled", engine=engine,
-                        context=_zero_context(context_mode), hit_sources=sources or [])
+            rec = _record(question=question, model=MODEL, sources=sources or [],
+                          in_tokens=0, out_tokens=0, latency_ms=0, grounded=False,
+                          blocked="cancelled", engine=engine,
+                          context=_zero_context(context_mode), hit_sources=sources or [])
             return {"text": "", "answer_text": "", "grounded": False,
                     "sources": sources or [], "blocked": "cancelled", "engine": engine,
                     "model": rec["model"], "cost_usd": rec["cost_usd"],
@@ -2373,9 +2400,9 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
         except GuardrailViolation as e:
             if explain:
                 _explain(f"  blocked: {e} — request never reaches retrieval or the model")
-            rec = audit(question=question, model=MODEL, sources=[], in_tokens=0, out_tokens=0,
-                        latency_ms=0, grounded=False, blocked=str(e), engine=engine,
-                        context=_zero_context(context_mode), hit_sources=[])
+            rec = _record(question=question, model=MODEL, sources=[], in_tokens=0, out_tokens=0,
+                          latency_ms=0, grounded=False, blocked=str(e), engine=engine,
+                          context=_zero_context(context_mode), hit_sources=[])
             _emit("guard", int((_time.monotonic() - g0) * 1000), "measured",
                   f"blocked: {e}", {"blocked": str(e), "audit_id": rec["id"]})
             blocked_text = f"🛑 Request blocked by input guardrail: {e}"
@@ -2510,18 +2537,25 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
             gen.get("model") or MODEL, in_tokens, out_tokens)
         total_cost = base_cost + rerank_spend
         telemetry = "estimated" if estimated else "measured"
-        rec = audit(question=question, model=gen.get("model") or MODEL, sources=sources,
-                    in_tokens=in_tokens, out_tokens=out_tokens,
-                    latency_ms=latency_ms, grounded=grounded, engine=engine,
-                    telemetry=telemetry, cost_usd=total_cost,
-                    context=context_fields, hit_sources=hit_sources)
+        rec = _record(question=question, model=gen.get("model") or MODEL, sources=sources,
+                      in_tokens=in_tokens, out_tokens=out_tokens,
+                      latency_ms=latency_ms, grounded=grounded, engine=engine,
+                      telemetry=telemetry, cost_usd=total_cost,
+                      context=context_fields, hit_sources=hit_sources)
         _emit("done", 0, telemetry, "", {"audit_id": rec["id"], "request_id": None})
-        return {"text": text, "answer_text": _clean_answer(text), "grounded": grounded,
-                "sources": sources, "blocked": None, "engine": engine,
-                "model": rec["model"], "cost_usd": rec["cost_usd"],
-                "telemetry": rec["telemetry"], "hits": hits, "stages": stages,
-                "scoring": scoring, "mode": eff_mode, "mode_effective": mode_effective,
-                "k": top_k, "pinned": pinned, "context": context_fields}
+        result = {"text": text, "answer_text": _clean_answer(text), "grounded": grounded,
+                  "sources": sources, "blocked": None, "engine": engine,
+                  "model": rec["model"], "cost_usd": rec["cost_usd"],
+                  "telemetry": rec["telemetry"], "hits": hits, "stages": stages,
+                  "scoring": scoring, "mode": eff_mode, "mode_effective": mode_effective,
+                  "k": top_k, "pinned": pinned, "context": context_fields}
+        # `context_text` (the exact assembled text the engine saw) rides only the grade
+        # path (audit=False): its sole consumer is the ADR-0008 judge, and the HTTP
+        # surfaces mirror this dict into a schema that forbids extra keys (AskResponse/
+        # DoneEvent). Keeping it off the audited path leaves that wire contract untouched.
+        if not write_audit:
+            result["context_text"] = assembled.text
+        return result
     finally:
         if persona_token is not None:
             _ACTIVE_PERSONA.reset(persona_token)
