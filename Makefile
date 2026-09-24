@@ -4,7 +4,7 @@
 
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 PROFILE ?= rail
-MODE ?= hybrid
+MODE ?=
 K ?= 4
 
 .PHONY: help test a2a-demo a2a-keygen a2a-accept workbench-accept reindex eval
@@ -45,5 +45,5 @@ workbench-accept:
 
 reindex:  ## Build the index for PROFILE in-process (--profile); PROFILE=vault needs INTERCHANGE_VAULT_DIR only when no overlay sets its docs_dir
 	@$(PY) interchange.py --profile $(PROFILE) --reindex
-eval:     ## Retrieval eval for PROFILE: MODE=hybrid|dense|bm25|hybrid+links|hybrid+rerank|all K=4 (corpus + golden come from the profile)
-	@$(PY) interchange.py --profile $(PROFILE) --eval --mode $(MODE) --k $(K)
+eval:     ## Retrieval eval for PROFILE: MODE=hybrid|dense|bm25|hybrid+links|hybrid+rerank|all (unset = the profile's declared default) K=4 (corpus + golden come from the profile)
+	@$(PY) interchange.py --profile $(PROFILE) --eval $(if $(MODE),--mode $(MODE)) --k $(K)

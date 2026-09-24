@@ -1820,10 +1820,34 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
             _ACTIVE_COLLECTION.reset(token)
 
 
-def answer(question: str, engine: str = "api", explain: bool = False) -> str:
+def answer(question: str, engine: str = "api", explain: bool = False, *,
+           mode: str | None = None, rerank_backend: str | None = None) -> str:
     """Run the RAG pipeline and return just the answer text (the CLI contract:
-    a blocked request comes back as the '🛑 Request blocked …' string)."""
-    return answer_detail(question, engine=engine, explain=explain)["text"]
+    a blocked request comes back as the '🛑 Request blocked …' string).
+
+    Retrieval mode follows the applied profile (ADR-0016): ``mode=None`` resolves to
+    ``PROFILE_RETRIEVAL["mode"]`` when a profile has been applied, else ``"hybrid"``;
+    an explicit ``mode`` wins. ``rerank_backend`` resolves the same way — explicit,
+    then ``PROFILE_RETRIEVAL["rerank"]``, then the ``INTERCHANGE_RERANK`` default
+    (``RERANK_BACKEND``) — but only matters when reranking. When the effective mode is
+    ``hybrid+rerank`` and the reranker cannot import, this fails **plainly** (fail
+    closed, ADR-0016) with the ``requirements-rerank.txt`` hint rather than silently
+    downgrading to plain hybrid. The HTTP path calls ``answer_detail`` directly with
+    its own explicit mode/rerank and is unaffected."""
+    eff_mode = mode if mode is not None else (
+        PROFILE_RETRIEVAL["mode"] if PROFILE_RETRIEVAL else "hybrid")
+    eff_rerank = rerank_backend
+    if eff_mode == "hybrid+rerank" and eff_rerank is None:
+        eff_rerank = (PROFILE_RETRIEVAL or {}).get("rerank") or RERANK_BACKEND
+    if eff_mode == "hybrid+rerank" or eff_rerank is not None:
+        reason = reranker_import_error()
+        if reason is not None:
+            sys.exit(
+                f"retrieval mode 'hybrid+rerank' needs the reranker, which is "
+                f"unavailable: {reason}. Install it: pip install -r requirements-rerank.txt"
+            )
+    return answer_detail(question, engine=engine, explain=explain,
+                         mode=eff_mode, rerank_backend=eff_rerank)["text"]
 
 
 # --- evaluation (offline, $0) ---------------------------------------------
@@ -1944,6 +1968,67 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             _ACTIVE_COLLECTION.reset(token)
 
 
+def golden_add(golden_path, question: str, expected: list[str], kind: str,
+               note: str | None, collection: str) -> dict:
+    """Append one *validated* row to a golden set — eval-as-you-go (ADR-0016 slice 5).
+
+    A miss becomes a golden row only if its expected source is actually indexed, so a
+    personal corpus grows a measured baseline instead of accreting typos. Every entry in
+    ``expected`` is checked against the sources ``collection`` holds (``_known_sources``
+    over that collection); the first unknown one is a plain ``SystemExit``. A duplicate
+    ``question`` — matched case-insensitively and whitespace-normalised against the rows
+    already in ``golden_path`` — is refused the same way. The appended row uses the same
+    schema as the existing rows: ``expected_source`` for a single source, else
+    ``expected_sources`` (a list), plus ``kind`` and, when given, ``note``. The golden
+    file is created (with its parent) when absent. Returns the appended row."""
+    import json as _json
+
+    golden_path = pathlib.Path(golden_path)
+    expected = list(expected)
+
+    # 1) every expected source must be indexed in this collection.
+    token = _ACTIVE_COLLECTION.set(collection) if collection else None
+    try:
+        known = _known_sources()
+    finally:
+        if token is not None:
+            _ACTIVE_COLLECTION.reset(token)
+    unknowns = unknown_expected([{"expected_sources": expected}], known)
+    if unknowns:
+        sys.exit(
+            f"expected source {unknowns[0]!r} is not indexed in collection "
+            f"{collection!r}; reindex the corpus or fix the path"
+        )
+
+    # 2) reject a duplicate question (exact match, case-insensitive, ws-normalised).
+    def _norm(q: str) -> str:
+        return " ".join(str(q).split()).lower()
+
+    target = _norm(question)
+    if golden_path.exists():
+        for line in golden_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if _norm(_json.loads(line).get("question", "")) == target:
+                sys.exit(f"duplicate question already in {golden_path.name}: {question!r}")
+
+    # 3) append one row in the existing schema.
+    row: dict = {"question": question}
+    if len(expected) == 1:
+        row["expected_source"] = expected[0]
+    else:
+        row["expected_sources"] = expected
+    row["kind"] = kind
+    if note:
+        row["note"] = note
+
+    golden_path.parent.mkdir(parents=True, exist_ok=True)
+    with golden_path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(row) + "\n")
+    return row
+
+
 # --- cli ------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Interchange — RAG Q&A MVP")
@@ -1964,9 +2049,11 @@ def main():
     ap.add_argument("--corpus", default=None, metavar="NAME",
                     help="Chroma collection --eval reads (default: the module collection); "
                          "the override is scoped to the run and never mutates module state")
-    ap.add_argument("--mode", choices=list(MODES) + ["all"], default="hybrid",
-                    help="retrieval mode for --eval: hybrid (RRF, default), dense, bm25, or "
-                         "'all' to run each and print a comparison table (ADR-0014)")
+    ap.add_argument("--mode", choices=list(MODES) + ["all"], default=None,
+                    help="retrieval mode: hybrid (RRF), dense, bm25, hybrid+rerank, or "
+                         "'all' (eval-only) to run each and print a comparison table "
+                         "(ADR-0014). Unset resolves to the applied profile's declared "
+                         "default (else hybrid); an explicit --mode wins (ADR-0016)")
     ap.add_argument("--depth", type=int, default=EVAL_DEPTH, metavar="N",
                     help=f"how deep --eval looks for the expected source, for rank + near-miss "
                          f"(default {EVAL_DEPTH})")
@@ -1993,6 +2080,20 @@ def main():
                          "until it has enough. Runs on your Claude subscription via headless Claude Code "
                          "+ an MCP tool server — no API key (ADR-0003). The hand-rolled API loop lives in "
                          "agent.py as Lesson 02 reference.")
+    ap.add_argument("--golden-add", action="store_true",
+                    help="append one validated row to the profile's golden set and exit — "
+                         "eval-as-you-go (ADR-0016). Requires --question and at least one "
+                         "--expected; the source must already be indexed in the corpus")
+    ap.add_argument("--question", metavar="Q",
+                    help="the question for --golden-add")
+    ap.add_argument("--expected", action="append", metavar="SRC",
+                    help="an expected source for --golden-add (repeatable; one source -> "
+                         "expected_source, several -> expected_sources)")
+    ap.add_argument("--kind", choices=["exact", "paraphrase", "linked", "duplicate-title"],
+                    default="paraphrase", metavar="KIND",
+                    help="the retrieval facet a --golden-add row probes (default: paraphrase)")
+    ap.add_argument("--note", metavar="TEXT",
+                    help="an optional annotation stored on the --golden-add row")
     args = ap.parse_args()
 
     # Apply the profile in-process before every branch (audit/eval/grade/.env/
@@ -2008,7 +2109,24 @@ def main():
         if args.agent:
             from agent_sub import answer_agentic_sub
             return answer_agentic_sub(q, explain=args.explain)
-        return answer(q, engine=args.engine, explain=args.explain)
+        # `--mode all` is eval-only; for --ask/REPL pass the (possibly None) mode
+        # through so an explicit --mode works for asking and None resolves to the
+        # profile default inside answer() (ADR-0016).
+        return answer(q, engine=args.engine, explain=args.explain, mode=args.mode)
+
+    if args.golden_add:
+        # Append a validated golden row after the profile is applied, before --eval.
+        if not args.question or not args.expected:
+            ap.error("--golden-add requires --question and at least one --expected")
+        row = golden_add(golden, args.question, args.expected, args.kind, args.note,
+                         args.corpus or COLLECTION)
+        import json as _json
+
+        print(_json.dumps(row))
+        count = sum(1 for line in pathlib.Path(golden).read_text().splitlines()
+                    if line.strip())
+        print(f"golden set now has {count} row(s): {golden}")
+        return
 
     if args.audit:
         from enterprise import audit_summary
@@ -2017,7 +2135,11 @@ def main():
         return
 
     if args.eval:
-        if args.mode == "all":
+        # Resolve the eval mode: an explicit --mode (including "all") wins; unset falls
+        # to the applied profile's declared default, else hybrid (ADR-0016).
+        eval_mode = args.mode if args.mode is not None else (
+            PROFILE_RETRIEVAL["mode"] if PROFILE_RETRIEVAL else "hybrid")
+        if eval_mode == "all":
             # include hybrid+rerank only if its backend imports; else skip it with
             # one honest line and run the rest (its optional deps are not in the gate).
             modes = list(MODES)
@@ -2051,7 +2173,7 @@ def main():
                 print(f"\n  hybrid+rerank skipped: {skip_reason}")
         else:
             run_eval(golden_path=golden, k=args.k, collection=args.corpus,
-                     mode=args.mode, depth=args.depth, pool=args.pool,
+                     mode=eval_mode, depth=args.depth, pool=args.pool,
                      rerank_n=args.rerank_n)
         return
 
