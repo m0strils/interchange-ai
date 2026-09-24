@@ -132,3 +132,29 @@ The five-practices row is a source hit at rank 1 and a passage miss in both mode
 the EventBridge row; the memory row passes under hybrid and misses under rerank, the
 options row the reverse. Live after slice 1: the answer still names the notes and not
 the practices, now without connector chatter. This table is what slice 3 must move.
+
+## Update 2026-09-23 — slice 3 step 1: lead is structural; corrected baseline
+Step 1 (bda36b3) made "lead" structural — the `preamble` chunk plus the first level-1
+heading section, stored as chunk metadata `lead` — after noticing that slice 2's
+title-equals-filename heuristic missed two of the three notes that triggered this ADR
+(their H1 differs from the filename). The **corrected** pre-merge baseline, all three
+corpora rebuilt with the flag (k=4, pool 20, rerank_n 30, cross-encoder; brain now 30
+notes / 485 chunks after two plan notes were added):
+
+| corpus | mode | hit@1 | hit@4 | passage@4 | lead share |
+|---|---|---:|---:|---:|---:|
+| rail (14) | hybrid | 14/14 | 14/14 | n/a | 0.18 |
+| vault (18) | hybrid+rerank | 15/18 | 15/18 | n/a | 0.08 |
+| vault (18) | hybrid | 11/18 | 14/18 | n/a | 0.06 |
+| brain (25, 6 with sections) | hybrid | 19/25 | 25/25 | 3/6 | 0.28 |
+| brain | dense | 19/25 | 25/25 | 3/6 | 0.32 |
+| brain | bm25 | 17/25 | 23/25 | 2/6 | 0.25 |
+| brain | hybrid+links | 10/25 | 23/25 | 3/6 | 0.28 |
+| brain | hybrid+rerank (profile default) | 18/25 | 22/25 | 3/6 | 0.26 |
+
+Slice 2's 0.12 was an undercount; the real lead share on the brain corpus is a
+quarter to a third of every top-4. Rebuilds: rail 0.3 s, brain 3.4 s, vault 30.4 s.
+One operational note: the brain `--mode all` run printed its table and then aborted at
+interpreter exit with a native `recursive_mutex lock failed` from library teardown
+(cross-encoder + Chroma in one process); the numbers above were printed before it.
+Tracked, not fixed here.
