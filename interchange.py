@@ -38,6 +38,22 @@ import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
 
 logger = logging.getLogger(__name__)
 
+# onnxruntime >= 1.21 on macOS aborts at process exit ("recursive_mutex lock
+# failed: Invalid argument") when its 1DS telemetry uploader thread races the
+# static destructors (microsoft/onnxruntime#24579). Chroma's default embedder
+# runs on onnxruntime, so every reindex/eval process here is exposed. A local
+# RAG tool has no business dispatching telemetry anyway: switch it off before
+# the first import (env) and before the first session (API). Both are no-ops
+# when onnxruntime is absent.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
+try:  # pragma: no cover - exercised by tests/test_ort_telemetry.py
+    import onnxruntime as _ort
+
+    _ort.disable_telemetry_events()
+    ORT_TELEMETRY_DISABLED = True
+except Exception:  # ImportError, or an onnxruntime build without the call
+    ORT_TELEMETRY_DISABLED = False
+
 # --- config ---------------------------------------------------------------
 DOCS_DIR = pathlib.Path(
     os.environ.get("INTERCHANGE_DOCS_DIR", str(pathlib.Path(__file__).parent / "docs"))
