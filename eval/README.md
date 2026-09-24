@@ -60,6 +60,9 @@ per-question table plus the aggregate.
 | `--depth N` | 10 | how deep to look for the expected source (for rank + near-miss) |
 | `--pool N` | 20 | dense candidate-pool size fed to fusion |
 | `--rerank-n N` | 30 | fused-candidate window `hybrid+rerank` reorders (backend from `INTERCHANGE_RERANK`) |
+| `--context {chunks,notes}` | profile, else `chunks` | context-assembly mode scored by `--eval` (ADR-0018): `chunks` is today's behaviour; `notes` assembles by note under a budget. Eval-only override — it does **not** wire assembly into the answer path |
+| `--budget-chars N` | profile, else `20000` | assembled-context char budget (ADR-0018) |
+| `--note-max-chars N` | profile, else `16000` | a note whose chunk text totals more than this never assembles whole (ADR-0018) |
 
 ### What it reports
 
@@ -87,10 +90,45 @@ per-question table plus the aggregate.
   whose label equals the note's filename) for a store built before this step, so the
   diagnostic keeps working across a reindex.
 - With `--mode all`, a comparison table:
-  `mode | hit@1 | hit@k | passage@k | near-miss | absent | lead`. On the seed corpus
-  this reproduces ADR-0007's measured numbers — hybrid `14/14`, dense-only `13/14` — so
-  the ablation is verifiable, not asserted (`passage@k` is `n/a` there — the seed set
-  carries no `expected_section`).
+  `mode | hit@1 | hit@k | passage@k | near-miss | absent | lead | ctx@k | note@k | chars`.
+  On the seed corpus this reproduces ADR-0007's measured numbers — hybrid `14/14`,
+  dense-only `13/14` — so the ablation is verifiable, not asserted (`passage@k` is `n/a`
+  there — the seed set carries no `expected_section`). The three context columns
+  (ADR-0018) are constant across the retrieval-mode rows — assembly runs *after* ranking,
+  so it never moves `hit@1`/`hit@k`/`passage@k`/`lead`.
+
+### Context assembly — `context@k`, `note@k`, chars (ADR-0018)
+
+The **retrieval unit is not the context unit**. `--eval` also scores the context the
+engine would actually see: after ranking, a pure step (`assemble_context`) assembles the
+context **from the first `k` hits** (production assembles from `TOP_K`, not the eval's
+`--depth` list) under the resolved context settings (`--context` / `--budget-chars` /
+`--note-max-chars`, else the profile, else the code defaults), reading the corpus through
+one injected snapshot (`eval_snapshot`, stubbed offline — so a `chunks` run and a stubbed
+`notes` run touch **no** Chroma). It reports:
+
+- **`context@k`** — over the **section rows** (a row carrying `expected_section` *or* the
+  new `expected_sections_all`). A section row is a context **hit** when an **included**
+  chunk of an expected source matches the label(s) — matched by the same `_section_matches`
+  rule as `passage@k`, on the included chunk's **`section` metadata, never a text
+  substring**. `expected_section` matches **ANY** of its labels (the ADR-0017 rule, so
+  `passage@k` does not move); `expected_sections_all` requires **EVERY** label to match some
+  included chunk. In `chunks` context, `context@k` degenerates to `passage@k` for a
+  single-section row (same denominator, same hits) — the included chunks *are* the hits.
+- **`note@k`** — a row hits when **every chunk of every expected source** is in the
+  assembled context (the whole note was included). Its denominator is the **eligible** rows
+  — those whose expected notes each total **≤ `note_max_chars`**; ineligible rows (a note
+  too big to assemble whole) are **listed by name** in the summary and excluded from the
+  denominator. `note@k` is only computed in `notes` context (`n/a` in `chunks`).
+- **`context chars: mean M, max X`** — the counter-metric. Whole-note inclusion buys
+  section recall at the cost of characters (and input tokens on the live runs); this is
+  what stops "include everything" from passing for free (review finding #4).
+- **`assembly: N whole, F fallbacks, S secret drops, D dropped hits, B budget hits`** — the
+  run-level assembly accounting: notes taken whole, notes that fell back to neighbour
+  expansion, expansion-added chunks dropped by the credential guard, hit chunks missing
+  from the snapshot, and rows whose budget was hit.
+
+`n/a` is printed wherever a denominator is 0.
 
 ### The run log — `eval-runs.jsonl`
 
@@ -108,6 +146,14 @@ records `{backend, window, calls, telemetry}`. `passage_at_k`/`passage_rows` are
 `a`/`b` of `passage@k`, `lead_share` the run's lead-chunk fraction, and each `results`
 row that carried an `expected_section` also carries its `passage_rank` (the 1-based rank
 of the first source-and-section match, or `null`).
+
+The context-assembly run (ADR-0018) adds `context_mode`, `context_at_k`, `context_rows`
+(the `a`/`b` of `context@k`), `note_at_k`, `note_rows` (the `a`/`b` of `note@k`), and
+`context_chars_mean`. Every `results` row also carries `context_kind`
+(`whole | neighbours | seed-only | not_retrieved`, the best kind over the expected
+sources), `context_reason` (the assembler's reason for the expected source), and
+`context_chars`; a **section** row also carries `context_hit`, and an **eligible** row
+also carries `note_hit`.
 
 ### Reranking — `hybrid+rerank` (ADR-0007 trigger, ADR-0014)
 
@@ -163,6 +209,12 @@ is identical** to `golden.jsonl`, with two differences a nested corpus brings:
   before. This is the metric that catches a retriever returning only a note's
   frontmatter/title chunks: the right *file* is in the top-k (a source hit) but no chunk
   carries the answer's *section* (a passage miss).
+- `expected_sections_all` (optional; always a **list**, ADR-0018) turns on **`context@k`**
+  scoring with **ALL-of** semantics: **every** listed label must match some *included*
+  chunk of an expected source (whereas `expected_section` keeps its **ANY-of** rule). A
+  row may carry both fields (the five-practices whole-note row does); `passage@k` still
+  reads only `expected_section`, so ADR-0017's numbers do not move. Add one with
+  `--golden-add --sections-all NAME` (repeatable, validated exactly like `--section`).
 - Optional `kind` and `note` fields annotate a row (e.g. the retrieval facet it probes,
   or why a source was chosen). `kind` is echoed in the per-question table and stored in
   the log; `note` is documentation for the reader. Neither affects scoring.

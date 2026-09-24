@@ -836,6 +836,67 @@ def passage_rank(hits, expected_sources, expected_sections) -> int | None:
     return None
 
 
+def context_hit(included, expected_sources, expected_section=None,
+                expected_sections_all=None) -> bool:
+    """Did the ASSEMBLED context recover the expected passage (ADR-0018)? Pure.
+
+    ``included`` is a list of ``(source, section)`` pairs for the chunks the assembler
+    emitted — ``assemble_context`` yields ``(source, chunk_index)`` and the caller
+    resolves each to its section via the snapshot, so matching is on chunk METADATA and
+    never a text substring (review finding #4). ``expected_sources`` is a str or list.
+    When ``expected_sections_all`` is given, EVERY label must match (``_section_matches``)
+    some included chunk whose source is expected; otherwise ``expected_section`` matches
+    ANY (the ADR-0017 rule, so ``passage@k`` does not move). A row carrying neither field
+    is not a section row and returns ``False``."""
+    if not (expected_section or expected_sections_all):
+        return False
+    wanted_src = ({expected_sources} if isinstance(expected_sources, str)
+                  else set(expected_sources))
+    have = [sec for (src, sec) in included if src in wanted_src]
+    if expected_sections_all:
+        labels = ([expected_sections_all] if isinstance(expected_sections_all, str)
+                  else list(expected_sections_all))
+        return all(any(_section_matches(lbl, sec) for sec in have) for lbl in labels)
+    return any(_section_matches(expected_section, sec) for sec in have)
+
+
+def note_eligible(snapshot, expected_sources, note_max_chars: int) -> bool:
+    """True iff EVERY expected source's whole-note text fits ``note_max_chars``
+    (ADR-0018) — the eligibility filter for ``note@k``. A note's size is the sum of its
+    chunk texts (from ``chunk_map`` over the injected snapshot, which exceeds the file by
+    the chunk overlap); a source absent from the snapshot is ineligible. Pure."""
+    srcs = ([expected_sources] if isinstance(expected_sources, str)
+            else list(expected_sources))
+    cmap = chunk_map(snapshot)
+    for src in srcs:
+        idxs = cmap.get(src)
+        if not idxs:
+            return False
+        if sum(len(snapshot.docs[i]) for i in idxs) > note_max_chars:
+            return False
+    return True
+
+
+def note_hit(assembled, snapshot, expected_sources) -> bool:
+    """True iff EVERY chunk of EVERY expected source is present in the assembled context
+    (ADR-0018) — ``note@k``'s "the whole note was included" test. Chunk indices come from
+    ``chunk_map`` over the snapshot; membership is checked against ``assembled.included``
+    (``(source, chunk_index)`` pairs). Pure."""
+    srcs = ([expected_sources] if isinstance(expected_sources, str)
+            else list(expected_sources))
+    cmap = chunk_map(snapshot)
+    included = {(s, ci) for (s, ci) in assembled.included}
+    for src in srcs:
+        idxs = cmap.get(src)
+        if not idxs:
+            return False
+        for i in idxs:
+            ci = int(snapshot.metas[i].get("chunk"))
+            if (src, ci) not in included:
+                return False
+    return True
+
+
 def is_lead_section(section, title=None, lead=None) -> bool:
     """True for a note's LEAD chunk (ADR-0017). When ``lead`` is a bool it is the
     authority — the structural flag ``mark_lead``/``build_index`` now stores on every
@@ -1037,6 +1098,16 @@ def corpus_snapshot(collection: str) -> Snapshot:
     with _SNAP_LOCK:
         _SNAP_CACHE[collection] = snap
     return snap
+
+
+def eval_snapshot(collection: str) -> Snapshot:
+    """The `Snapshot` the eval assembles context from (ADR-0018 Slice C).
+
+    A one-line named seam over `corpus_snapshot` so the offline eval can inject a
+    `fake_snapshot(...)` (conftest) by monkeypatching this name — the way `retrieve`
+    is stubbed — and a scenario can assert the eval path makes NO Chroma call when both
+    `retrieve` and `eval_snapshot` are stubbed. Production resolves straight through."""
+    return corpus_snapshot(collection)
 
 
 # --- context assembly (ADR-0018): assemble context by note, under a budget ---
@@ -2247,7 +2318,8 @@ def answer(question: str, engine: str = "api", explain: bool = False, *,
 # --- evaluation (offline, $0) ---------------------------------------------
 def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None = None,
              mode: str = "hybrid", depth: int = EVAL_DEPTH, pool: int = DENSE_POOL,
-             rerank_n: int = RERANK_N,
+             rerank_n: int = RERANK_N, context: str | None = None,
+             budget_chars: int | None = None, note_max_chars: int | None = None,
              log_path: pathlib.Path = EVAL_LOG, quiet: bool = False) -> dict:
     """Offline retrieval eval (ADR-0007/0014): for each golden {question,
     expected_source}, run retrieve() under `mode` to `depth`, and record hit@k,
@@ -2284,6 +2356,29 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
                   f"scored as absent: {', '.join(unknowns)}\n")
 
         corpus = active_collection()
+
+        # -- ADR-0018: assemble the context the engine would see and score it --
+        # Resolve the context settings (explicit argument, else the applied profile,
+        # else the code defaults) and, for `notes`, take the injected snapshot ONCE
+        # via `eval_snapshot` (stubbed offline; the sole Chroma seam here). `chunks`
+        # needs no snapshot — the assembler ignores it — so the seam is never touched
+        # and the ADR-0017 tests, which stub only `retrieve`, stay Chroma-free.
+        eff_context = context if context is not None else (
+            PROFILE_RETRIEVAL["context"] if PROFILE_RETRIEVAL else CONTEXT_MODES[0])
+        eff_budget = budget_chars if budget_chars is not None else (
+            PROFILE_RETRIEVAL["budget_chars"] if PROFILE_RETRIEVAL else CONTEXT_BUDGET_CHARS)
+        eff_note_max = note_max_chars if note_max_chars is not None else (
+            PROFILE_RETRIEVAL["note_max_chars"] if PROFILE_RETRIEVAL else NOTE_MAX_CHARS)
+        snapshot = eval_snapshot(corpus) if eff_context == "notes" else None
+        snap_sec_by_ref: dict = {}
+        if snapshot is not None:
+            for _i, _m in enumerate(snapshot.metas):
+                _m = _m or {}
+                _s, _c = _m.get("source"), _m.get("chunk")
+                if _s is None or _c is None:
+                    continue
+                snap_sec_by_ref[(_s, int(_c))] = _m.get("section")
+
         if not quiet:
             print(f"Retrieval eval — mode={mode} hit@{k} over {len(scored)} answerable "
                   f"question(s) (corpus={corpus}, depth={depth}, pool={pool})\n")
@@ -2302,6 +2397,17 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
         passage_hits = 0
         passage_rows = 0
         lead_metas: list[dict] = []
+        # context assembly scoring (ADR-0018), all from the FIRST k pairs:
+        # `context@k` (section rows), `note@k` (rows whose expected notes fit
+        # `note_max_chars`), a chars counter-metric, and per-row assembly reasons.
+        context_hits = 0
+        context_rows = 0
+        note_hits = 0
+        note_rows = 0
+        ineligible_names: list[str] = []
+        context_chars: list[int] = []
+        asm_whole = asm_fallbacks = asm_secret = asm_dropped = asm_budget = 0
+        _KIND_RANK = {"whole": 3, "neighbours": 2, "seed-only": 1, "not_retrieved": 0}
         for row in scored:
             question = row["question"]
             expected = row.get("expected_source") or row.get("expected_sources")
@@ -2310,8 +2416,9 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             # only the rerank mode reads rerank_n; keep the call shape identical to
             # slice-4 for every other mode so existing retrieve fakes are untouched.
             extra = {"rerank_n": rerank_n} if mode == "hybrid+rerank" else {}
-            metas = [m for _, m in retrieve(question, mode=mode, top_k=depth,
-                                            pool=pool, **extra)]
+            pairs = list(retrieve(question, mode=mode, top_k=depth,
+                                  pool=pool, **extra))
+            metas = [m for _, m in pairs]
             # source-level scoring is byte-for-byte unchanged (ADR-0014 numbers depend
             # on it): the same source list, in the same order, from the same metas.
             sources = [m["source"] for m in metas]
@@ -2326,12 +2433,93 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             p_rank = None
             if expected_section:
                 passage_rows += 1
-                pairs = [(m.get("source"), m.get("section")) for m in metas]
-                p_rank = passage_rank(pairs, expected, expected_section)
+                sec_pairs = [(m.get("source"), m.get("section")) for m in metas]
+                p_rank = passage_rank(sec_pairs, expected, expected_section)
                 if p_rank is not None and p_rank <= k:
                     passage_hits += 1
                 result_row["expected_section"] = expected_section
                 result_row["passage_rank"] = p_rank
+
+            # -- ADR-0018: assemble the context from the FIRST k pairs and score it.
+            # Production assembles from TOP_K, so the eval must too — the depth-10 list
+            # above is only for rank/near-miss. Hits are built as the assembler expects
+            # them (source, chunk index, text); `chunk` falls back to position for a
+            # fake meta that carries none (the ADR-0017 stub).
+            k_pairs = pairs[:k]
+            asm_hits = [{"source": m["source"], "chunk": m.get("chunk", j), "text": d}
+                        for j, (d, m) in enumerate(k_pairs)]
+            assembled = assemble_context(
+                asm_hits, snapshot, mode=eff_context,
+                budget_chars=eff_budget, note_max_chars=eff_note_max)
+            context_chars.append(assembled.chars)
+            asm_whole += sum(1 for r in assembled.reasons.values() if r == "whole")
+            asm_fallbacks += assembled.fallbacks
+            asm_secret += assembled.secret_drops
+            asm_dropped += assembled.dropped_hits
+            asm_budget += 1 if assembled.budget_hit else 0
+
+            # section label of each INCLUDED chunk (metadata, never a text substring):
+            # from the snapshot in `notes` mode (expanded chunks are not in the hits),
+            # from the hit metas in `chunks` mode.
+            if snapshot is not None:
+                included_pairs = [(s, snap_sec_by_ref.get((s, int(ci))))
+                                  for (s, ci) in assembled.included]
+            else:
+                hit_sec = {(m["source"], m.get("chunk", j)): m.get("section")
+                           for j, (d, m) in enumerate(k_pairs)}
+                included_pairs = [(s, hit_sec.get((s, ci)))
+                                  for (s, ci) in assembled.included]
+
+            # per-row context_kind, summarised as the BEST kind over the expected
+            # sources (whole > neighbours > seed-only > not_retrieved).
+            exp_list = [expected] if isinstance(expected, str) else list(expected)
+            seed_counts: dict = {}
+            _seen: set = set()
+            for h in asm_hits:
+                ref = (h["source"], h["chunk"])
+                if ref in _seen:
+                    continue
+                _seen.add(ref)
+                seed_counts[h["source"]] = seed_counts.get(h["source"], 0) + 1
+            best_ckind = "not_retrieved"
+            best_src = exp_list[0] if exp_list else None
+            for src in exp_list:
+                r = assembled.reasons.get(src)
+                if r is None:
+                    ckind = "not_retrieved"
+                elif r == "whole":
+                    ckind = "whole"
+                else:                       # note_too_big / budget_exhausted
+                    inc = sum(1 for (s, _c) in assembled.included if s == src)
+                    ckind = ("seed-only" if inc <= seed_counts.get(src, 0)
+                             else "neighbours")
+                if _KIND_RANK[ckind] >= _KIND_RANK[best_ckind]:
+                    best_ckind, best_src = ckind, src
+            result_row["context_kind"] = best_ckind
+            result_row["context_reason"] = assembled.reasons.get(best_src) or "not_retrieved"
+            result_row["context_chars"] = assembled.chars
+
+            # context@k (section rows: `expected_section` ANY or `expected_sections_all`
+            # ALL) and note@k (rows whose expected notes fit `note_max_chars`).
+            expected_sections_all = row.get("expected_sections_all")
+            if expected_section or expected_sections_all:
+                context_rows += 1
+                c_hit = context_hit(included_pairs, expected,
+                                    expected_section=expected_section,
+                                    expected_sections_all=expected_sections_all)
+                context_hits += 1 if c_hit else 0
+                result_row["context_hit"] = c_hit
+            if snapshot is not None:
+                if note_eligible(snapshot, exp_list, eff_note_max):
+                    note_rows += 1
+                    n_hit = note_hit(assembled, snapshot, exp_list)
+                    note_hits += 1 if n_hit else 0
+                    result_row["note_hit"] = n_hit
+                else:
+                    label = expected if isinstance(expected, str) else ", ".join(expected)
+                    if label not in ineligible_names:
+                        ineligible_names.append(label)
+
             results.append(result_row)
             if not quiet:
                 mark = "✅" if hit else "❌"
@@ -2352,6 +2540,10 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
         # lead share over every scored row's top-k, as one fraction (ADR-0017).
         share = lead_share(lead_metas, len(lead_metas))
 
+        # context counter-metric (ADR-0018): mean / max assembled chars per row.
+        chars_mean = (sum(context_chars) / len(context_chars)) if context_chars else None
+        chars_max = max(context_chars) if context_chars else 0
+
         # rerank metadata: present only when this run reranked (else null). Local
         # backends are `measured` ($0); TypeSafe is `estimated` (ADR-0004). `calls`
         # counts the metered TypeSafe pairs this run made — 0 for the local backends.
@@ -2371,6 +2563,9 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             "depth": depth, "pool": pool, "rerank": rerank_meta,
             "passage_at_k": passage_hits, "passage_rows": passage_rows,
             "lead_share": share,
+            "context_mode": eff_context, "context_at_k": context_hits,
+            "context_rows": context_rows, "note_at_k": note_hits,
+            "note_rows": note_rows, "context_chars_mean": chars_mean,
             "skipped": skipped, "results": results,
         }
 
@@ -2393,6 +2588,20 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             print(f"  near-miss (expected within top-{depth} but outside top-{k}) = {near_miss}"
                   f"  <- ADR-0007 reranker trigger (build the reranker when this is > 0)")
             print(f"  skipped (no expected source — unanswerable, see --grade) = {skipped}")
+            # ADR-0018 context-assembly lines (added after the existing ones).
+            ctx_val = f"{context_hits}/{context_rows}" if context_rows else "n/a"
+            print(f"  context@{k} = {ctx_val}  (section rows)")
+            note_val = f"{note_hits}/{note_rows}" if note_rows else "n/a"
+            inelig = (f"; ineligible: {', '.join(q[:44] for q in ineligible_names)}"
+                      if ineligible_names else "")
+            print(f"  note@{k} = {note_val}  (eligible rows{inelig})")
+            if chars_mean is not None:
+                print(f"  context chars: mean {chars_mean:.0f}, max {chars_max}")
+            else:
+                print(f"  context chars: n/a")
+            print(f"  assembly: {asm_whole} whole, {asm_fallbacks} fallbacks, "
+                  f"{asm_secret} secret drops, {asm_dropped} dropped hits, "
+                  f"{asm_budget} budget hits")
             print(f"  -> {log_path}")
         return result
     finally:
@@ -2401,7 +2610,8 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
 
 
 def golden_add(golden_path, question: str, expected: list[str], kind: str,
-               note: str | None, collection: str, sections=None) -> dict:
+               note: str | None, collection: str, sections=None,
+               sections_all=None) -> dict:
     """Append one *validated* row to a golden set — eval-as-you-go (ADR-0016 slice 5).
 
     A miss becomes a golden row only if its expected source is actually indexed, so a
@@ -2416,21 +2626,25 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
     must have an indexed chunk whose ``section`` matches every label (same substring,
     case-insensitive rule as the eval), else a plain ``SystemExit`` names the missing
     section and source; the appended row then carries ``expected_section`` — a string
-    for one label, a list for several. The golden file is created (with its parent)
-    when absent. Returns the appended row."""
+    for one label, a list for several. ``sections_all`` (ADR-0018) is validated the same
+    way and written as ``expected_sections_all`` — always a **list** — and may be given
+    alongside ``sections`` (the five-practices row carries both). The golden file is
+    created (with its parent) when absent. Returns the appended row."""
     import json as _json
 
     golden_path = pathlib.Path(golden_path)
     expected = list(expected)
     sections = list(sections) if sections else []
+    sections_all = list(sections_all) if sections_all else []
 
     # 1) every expected source must be indexed in this collection; when sections are
-    #    named, read each source's section labels in the same collection context.
+    #    named (either field), read each source's section labels in the same context.
+    all_labels = sections + sections_all
     token = _ACTIVE_COLLECTION.set(collection) if collection else None
     try:
         known = _known_sources()
         section_by_source = ({src: _known_sections(src) for src in expected}
-                             if sections else {})
+                             if all_labels else {})
     finally:
         if token is not None:
             _ACTIVE_COLLECTION.reset(token)
@@ -2441,10 +2655,11 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
             f"{collection!r}; reindex the corpus or fix the path"
         )
 
-    # 1b) each named section must appear on at least one indexed chunk of each source.
+    # 1b) each named section (from either field) must appear on at least one indexed
+    #     chunk of each source.
     for src in expected:
         have = section_by_source.get(src, set())
-        for sec in sections:
+        for sec in all_labels:
             if not any(_section_matches(sec, label) for label in have):
                 sys.exit(
                     f"section {sec!r} is not on any indexed chunk of {src!r} in "
@@ -2472,6 +2687,8 @@ def golden_add(golden_path, question: str, expected: list[str], kind: str,
         row["expected_sources"] = expected
     if sections:
         row["expected_section"] = sections[0] if len(sections) == 1 else sections
+    if sections_all:
+        row["expected_sections_all"] = sections_all
     row["kind"] = kind
     if note:
         row["note"] = note
@@ -2550,6 +2767,20 @@ def main():
                          "Each expected source must have an indexed chunk whose section "
                          "matches. Writes expected_section — a string for one, a list for "
                          "several")
+    ap.add_argument("--sections-all", action="append", metavar="NAME",
+                    help="an expected section label for --golden-add that must ALL be present "
+                         "(repeatable; ADR-0018). Validated exactly like --section; writes "
+                         "expected_sections_all (always a list). Combinable with --section")
+    ap.add_argument("--context", choices=list(CONTEXT_MODES), default=None,
+                    help="context-assembly mode for --eval (ADR-0018): 'chunks' (today's "
+                         "behaviour) or 'notes' (assemble by note, under a budget). Eval-only "
+                         "override; unset resolves to the applied profile, else 'chunks'")
+    ap.add_argument("--budget-chars", type=int, default=None, metavar="N",
+                    help="assembled-context char budget for --eval (ADR-0018); unset resolves "
+                         "to the applied profile, else the code default")
+    ap.add_argument("--note-max-chars", type=int, default=None, metavar="N",
+                    help="max whole-note chars for --eval assembly (ADR-0018); a note larger "
+                         "than this never assembles whole; unset resolves to the profile/default")
     ap.add_argument("--note", metavar="TEXT",
                     help="an optional annotation stored on the --golden-add row")
     args = ap.parse_args()
@@ -2577,7 +2808,8 @@ def main():
         if not args.question or not args.expected:
             ap.error("--golden-add requires --question and at least one --expected")
         row = golden_add(golden, args.question, args.expected, args.kind, args.note,
-                         args.corpus or COLLECTION, sections=args.section)
+                         args.corpus or COLLECTION, sections=args.section,
+                         sections_all=args.sections_all)
         import json as _json
 
         print(_json.dumps(row))
@@ -2609,7 +2841,9 @@ def main():
             summaries = {
                 m: run_eval(golden_path=golden, k=args.k, collection=args.corpus,
                             mode=m, depth=args.depth, pool=args.pool,
-                            rerank_n=args.rerank_n, quiet=True)
+                            rerank_n=args.rerank_n, context=args.context,
+                            budget_chars=args.budget_chars,
+                            note_max_chars=args.note_max_chars, quiet=True)
                 for m in modes
             }
             n = next(iter(summaries.values()))["n"]
@@ -2617,10 +2851,12 @@ def main():
                   f"(k={args.k}, depth={args.depth}, pool={args.pool})\n")
             hk = f"hit@{args.k}"
             pk = f"passage@{args.k}"
+            ck = f"ctx@{args.k}"
+            nk = f"note@{args.k}"
             print(f"  {'mode':<14} {'hit@1':>9} {hk:>9} {pk:>11} {'near-miss':>11} "
-                  f"{'absent':>9} {'lead':>6}")
+                  f"{'absent':>9} {'lead':>6} {ck:>9} {nk:>9} {'chars':>7}")
             print(f"  {'-' * 14} {'-' * 9} {'-' * 9} {'-' * 11} {'-' * 11} "
-                  f"{'-' * 9} {'-' * 6}")
+                  f"{'-' * 9} {'-' * 6} {'-' * 9} {'-' * 9} {'-' * 7}")
             for m in modes:
                 s = summaries[m]
                 h1 = f"{s['hit_at_1']}/{s['n']}"
@@ -2628,8 +2864,15 @@ def main():
                 pk_col = (f"{s['passage_at_k']}/{s['passage_rows']}"
                           if s['passage_rows'] else "n/a")
                 lead_col = f"{s['lead_share']:.2f}"
+                ck_col = (f"{s['context_at_k']}/{s['context_rows']}"
+                          if s['context_rows'] else "n/a")
+                nk_col = (f"{s['note_at_k']}/{s['note_rows']}"
+                          if s['note_rows'] else "n/a")
+                chars_col = (f"{s['context_chars_mean']:.0f}"
+                             if s['context_chars_mean'] is not None else "n/a")
                 print(f"  {m:<14} {h1:>9} {hk_col:>9} {pk_col:>11} {s['near_miss']:>11} "
-                      f"{s['absent']:>9} {lead_col:>6}")
+                      f"{s['absent']:>9} {lead_col:>6} {ck_col:>9} {nk_col:>9} "
+                      f"{chars_col:>7}")
             if "hybrid+rerank" in modes:
                 label = "estimated" if RERANK_BACKEND == "typesafe" else "measured"
                 print(f"\n  rerank backend: {RERANK_BACKEND} "
@@ -2639,7 +2882,9 @@ def main():
         else:
             run_eval(golden_path=golden, k=args.k, collection=args.corpus,
                      mode=eval_mode, depth=args.depth, pool=args.pool,
-                     rerank_n=args.rerank_n)
+                     rerank_n=args.rerank_n, context=args.context,
+                     budget_chars=args.budget_chars,
+                     note_max_chars=args.note_max_chars)
         return
 
     if args.grade:
