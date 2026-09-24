@@ -359,3 +359,24 @@ whole-note rows passing, note@4 ≥ 5 of eligible, mean chars < 14,000. The chec
 row is `not_retrieved` (a ranking miss) and is the one row assembly cannot recover, so 6/7
 is the ceiling. Knobs unchanged (20,000 / 16,000). Slice D stays unstarted until the
 revised assembler meets the expectations on the eval.
+
+## Update 2026-09-24 — slice B′ measured; knob decision; stop rule passes
+Slice B′ (fa7129e) implemented the fair-share rule. **Measured**, profile default
+(`hybrid+rerank`, `notes`, 20,000 / 16,000): context@4 **6/7** with both whole-note rows
+recovered, note@4 **19/24**, mean chars **14,509** — two of three expectations met, the
+chars ceiling missed by 3.6%. The one context miss is a ranking miss (source absent at
+depth 10), the pre-registered ceiling. Budget sweep on the eval, cap 16,000: 18,000 →
+5/7 at 13,038; 17,000 → 5/7 at 12,550; 16,000 → 4/7 at 10,850. Cap 12,000 variants: 4/7.
+Under the ceiling the 15,395-char EventBridge note stops fitting and its row falls back;
+the pair (6/7, < 14,000) is not jointly reachable at any budget with the reranker on.
+
+**Knob decision.** The `--mode all` table shows plain `hybrid` with `notes` at **7/7,
+21/24, mean 12,961**, inside every ceiling. On this corpus the control already had hybrid
+equal or better than rerank on every ranking column (hit@4 25/25 vs 22/25; passage@4 3/6
+vs 2/6), and ADR-0016 recorded that the reranker's vault win did not transfer to the brain
+set. The brain overlay's `mode` is therefore set to `hybrid` (a profile key, reversible;
+the vault profile keeps `hybrid+rerank`, its measured best). Confirmed as the profile
+default: hit@1 17/25, hit@4 25/25, passage@4 3/6, lead 0.30 (identical to the control's
+hybrid row); **context@4 7/7, note@4 21/24, mean chars 12,961, max 19,761**; 43 whole,
+24 fallbacks, 0 secret drops, 11 budget hits. No pre-registered expectation was changed.
+Slice D (wiring) proceeds on this configuration; slice E re-measures it live.
