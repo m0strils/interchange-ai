@@ -78,6 +78,14 @@ per-question table plus the aggregate.
   whose section is `preamble` or the note's H1 (title). High lead share is the symptom
   ADR-0017's lead-chunk merge exists to move down: the retriever surfacing short
   title/frontmatter chunks instead of the body sections that carry answers.
+
+  As of ADR-0017 slice 3 step 1, "lead" is **structural**, not lexical: a note's lead is
+  its `preamble` chunk (level 0, where frontmatter lives) plus the chunks of the first
+  heading section when that heading is an H1 — decided by `mark_lead` at ingest and
+  stored on every chunk as the boolean metadata field `lead`. `lead share` now reads
+  that flag when it is present and only falls back to the old title heuristic (an H1
+  whose label equals the note's filename) for a store built before this step, so the
+  diagnostic keeps working across a reindex.
 - With `--mode all`, a comparison table:
   `mode | hit@1 | hit@k | passage@k | near-miss | absent | lead`. On the seed corpus
   this reproduces ADR-0007's measured numbers — hybrid `14/14`, dense-only `13/14` — so

@@ -176,7 +176,10 @@ def apply_profile(name: str) -> dict:
 
 
 # --- ingest ---------------------------------------------------------------
-_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
+# Capture the leading hashes AND the heading text: group(1)'s length is the
+# heading DEPTH (1..6) that becomes a chunk's ``level``; group(2) is the section
+# label, unchanged from before this slice (ADR-0017).
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 def _char_windows(body: str) -> list[str]:
@@ -194,29 +197,72 @@ def _char_windows(body: str) -> list[str]:
 def chunk(text: str) -> list[dict]:
     """Structure-aware chunking (ADR-0007): split on Markdown headings so each
     chunk carries the section it came from — a big win over blind char windows on
-    these heading-organized docs. Returns a list of {"text": str, "section": str}.
-    Content before the first heading is section "preamble"; the heading line stays
-    with its section's text. A section body longer than CHUNK_CHARS is split into
-    overlapping char windows that all keep the same section label. Whitespace-only
-    chunks are dropped."""
-    sections: list[tuple[str, list[str]]] = [("preamble", [])]
+    these heading-organized docs. Returns a list of
+    {"text": str, "section": str, "level": int}. Content before the first heading is
+    section "preamble" with ``level`` 0; a heading section carries its heading DEPTH
+    (1 for ``#`` … 6 for ``######``) as ``level``, and the heading line stays with its
+    section's text. A section body longer than CHUNK_CHARS is split into overlapping
+    char windows that all keep the same section label AND level. Whitespace-only
+    chunks are dropped. ``level`` is additive — existing callers read ``text`` and
+    ``section`` by key (ADR-0017)."""
+    sections: list[tuple[str, int, list[str]]] = [("preamble", 0, [])]
     for line in text.splitlines():
         m = _HEADING_RE.match(line)
         if m:
-            sections.append((m.group(1).strip(), [line]))
+            sections.append((m.group(2).strip(), len(m.group(1)), [line]))
         else:
-            sections[-1][1].append(line)
+            sections[-1][2].append(line)
 
     chunks: list[dict] = []
-    for label, lines in sections:
+    for label, level, lines in sections:
         body = "\n".join(lines).strip()
         if not body:
             continue
         for window in _char_windows(body):
             w = window.strip()
             if w:
-                chunks.append({"text": w, "section": label})
+                chunks.append({"text": w, "section": label, "level": level})
     return chunks
+
+
+def mark_lead(chunks: list[dict]) -> list[dict]:
+    """Flag each chunk's structural LEAD role (ADR-0017), returning NEW dicts (the
+    inputs are not mutated). A note's lead is the leading run of ``preamble`` chunks
+    (``level`` 0) followed by the chunks of the FIRST heading section — but only when
+    that heading is level 1. The run stops at the first chunk that breaks it: a first
+    heading of level 2+ leaves only the preamble as lead, and any section after the
+    first level-1 one (a second H1 included) is never lead. Each returned dict is the
+    input plus ``lead: bool``. An empty list returns an empty list. Structural, not
+    lexical — nothing here reads a title or filename."""
+    out = [dict(c) for c in chunks]
+    seen_heading = False        # have we moved past the preamble run?
+    broken = False              # has the leading run ended?
+    lead_label = None           # the first-H1 section's label, once we enter it
+    for c in out:
+        level = c.get("level", 0)
+        section = c.get("section")
+        if broken:
+            c["lead"] = False
+            continue
+        if not seen_heading and level == 0:
+            c["lead"] = True                    # a preamble (frontmatter/intro) chunk
+            continue
+        if not seen_heading:                    # the FIRST heading section starts here
+            seen_heading = True
+            if level == 1:
+                lead_label = section
+                c["lead"] = True
+            else:                               # first heading is H2+ → preamble only
+                c["lead"] = False
+                broken = True
+            continue
+        # inside or past the first heading section: its own windows share label+level
+        if lead_label is not None and level == 1 and section == lead_label:
+            c["lead"] = True
+        else:                                   # a new section breaks the run
+            c["lead"] = False
+            broken = True
+    return out
 
 
 def _extract_pdf(path: str) -> str:
@@ -559,11 +605,11 @@ def build_index():
         title = posixpath.basename(name)
         if title.endswith(".md"):
             title = title[:-3]
-        for j, ch in enumerate(chunk(text)):
+        for j, ch in enumerate(mark_lead(chunk(text))):
             ids.append(f"{name}:{j}")
             docs.append(ch["text"])
             metas.append({"source": name, "chunk": j, "section": ch["section"],
-                          "links": links_meta, "title": title})
+                          "links": links_meta, "title": title, "lead": ch["lead"]})
     col.add(ids=ids, documents=docs, metadatas=metas)
     indexed = len(files) - skipped - secret_skipped
     secs = time.monotonic() - started
@@ -782,12 +828,16 @@ def passage_rank(hits, expected_sources, expected_sections) -> int | None:
     return None
 
 
-def is_lead_section(section, title=None) -> bool:
-    """True for a note's LEAD chunk — the ``preamble`` (frontmatter/intro before any
-    heading) or the H1 section whose label equals the note's title (ADR-0017). ``title``
-    is the note title ``build_index`` records (basename without ``.md``); when given, an
-    H1 section matching it counts as lead. These short, topic-token-dense chunks are the
-    ones that outrank body sections; ``lead_share`` counts them."""
+def is_lead_section(section, title=None, lead=None) -> bool:
+    """True for a note's LEAD chunk (ADR-0017). When ``lead`` is a bool it is the
+    authority — the structural flag ``mark_lead``/``build_index`` now stores on every
+    chunk (``preamble`` + first H1) — and is returned as-is. Otherwise the pre-slice-3
+    heuristic applies, so a store built before this step still scores: the ``preamble``
+    (frontmatter/intro before any heading) or the H1 section whose label equals the
+    note's ``title`` (the basename without ``.md``). These short, topic-token-dense
+    chunks are the ones that outrank body sections; ``lead_share`` counts them."""
+    if isinstance(lead, bool):
+        return lead
     sec = _norm_section(section)
     if sec == "preamble":
         return True
@@ -797,14 +847,17 @@ def is_lead_section(section, title=None) -> bool:
 
 
 def lead_share(hits_meta, k: int) -> float:
-    """Fraction of the top-``k`` hits that are LEAD chunks (preamble or H1) — the
+    """Fraction of the top-``k`` hits that are LEAD chunks (preamble or first H1) — the
     diagnostic ADR-0017's lead-chunk merge must move down. ``hits_meta`` is an ordered
-    list of chunk-metadata dicts (each with ``section`` and, ideally, ``title``);
-    returns 0.0 for an empty top-k."""
+    list of chunk-metadata dicts (each with ``section`` and, ideally, ``title`` and the
+    structural ``lead`` flag); the ``lead`` flag is preferred when present, so a store
+    built before this step falls back to the title heuristic. Returns 0.0 for an empty
+    top-k."""
     top = list(hits_meta)[:k]
     if not top:
         return 0.0
-    lead = sum(1 for m in top if is_lead_section(m.get("section"), m.get("title")))
+    lead = sum(1 for m in top
+               if is_lead_section(m.get("section"), m.get("title"), m.get("lead")))
     return lead / len(top)
 
 

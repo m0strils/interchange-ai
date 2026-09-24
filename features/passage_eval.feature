@@ -68,3 +68,42 @@ Feature: Passage-level retrieval eval (ADR-0017)
     And a question whose retrieval returns "note.md@preamble,note.md@Setup" each titled "note"
     When I run the passage eval at k 4
     Then the eval log record carries passage_at_k and lead_share
+
+  # --- Slice 3, step 1: structural lead detection (ADR-0017) ----------------
+  # mark_lead is a pure, structural pass: preamble (level 0) plus the FIRST heading
+  # section when that heading is level 1. It reads no title or filename.
+
+  Scenario: The preamble is a lead chunk
+    Given a note chunked as "preamble@0,Title@1,Body@2"
+    When I mark the lead chunks
+    Then the lead flags are "true,true,false"
+
+  Scenario: The first H1 is lead regardless of the filename
+    Given a note chunked as "preamble@0,A Heading Unlike The Filename@1,Body@2"
+    When I mark the lead chunks
+    Then the lead flags are "true,true,false"
+
+  Scenario: A later H1 is not lead
+    Given a note chunked as "preamble@0,First@1,Second@1"
+    When I mark the lead chunks
+    Then the lead flags are "true,true,false"
+
+  Scenario: A note that starts with an H2 has only its preamble as lead
+    Given a note chunked as "preamble@0,Body@2"
+    When I mark the lead chunks
+    Then the lead flags are "true,false"
+
+  Scenario: lead_share prefers the metadata flag
+    Given metadata chunks with sections and lead flags "Body=true,preamble=false"
+    When I measure the lead share at k 2
+    Then the lead share is "0.50"
+
+  Scenario: The title heuristic still applies to metadata without the flag
+    Given retrieved chunks with sections "Guide,Body" each titled "Guide"
+    When I measure the lead share at k 2
+    Then the lead share is "0.50"
+
+  Scenario: build_index stores the lead flag
+    Given a one-note corpus of frontmatter, an H1 and an H2 body, and a recording Chroma client
+    When I build the index
+    Then the recorded lead flags are "true,true,false"

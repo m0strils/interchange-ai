@@ -280,3 +280,102 @@ def test_looks_like_secret_flags_real_key_shapes():
     assert looks_like_secret("sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2") is True  # sk- + 24 alnum
     # api_key: "<24 mixed alnum with digits>"
     assert looks_like_secret('api_key: "a1b2c3d4e5f6g7h8i9j0k1l2"') is True
+
+
+# --- chunk(): heading level (contract "chunk", ADR-0017) ------------------
+def test_chunk_preamble_is_level_zero():
+    """Content before the first heading is section ``preamble`` at ``level`` 0."""
+    from interchange import chunk
+
+    pre = [c for c in chunk("Intro before any heading.\n\n# Title\nBody.")
+           if c["section"] == "preamble"]
+    assert pre and all(c["level"] == 0 for c in pre)
+
+
+def test_chunk_h1_is_level_one_and_h3_is_level_three():
+    """A ``#`` heading section carries ``level`` 1, a ``###`` one ``level`` 3 — the
+    heading DEPTH — without changing the section labels."""
+    from interchange import chunk
+
+    chunks = chunk("# One\nUnder one.\n\n### Three\nUnder three.")
+    by_section = {c["section"]: c for c in chunks}
+    assert by_section["One"]["level"] == 1
+    assert by_section["Three"]["level"] == 3
+
+
+def test_chunk_long_section_windows_all_carry_the_level():
+    """Every char window of an over-long section keeps the same section label AND
+    the same ``level``."""
+    from interchange import CHUNK_CHARS, chunk
+
+    text = "## Big Section\n" + ("word " * (CHUNK_CHARS // 2))
+    big = [c for c in chunk(text) if c["section"] == "Big Section"]
+    assert len(big) >= 2, "oversized section should split into multiple chunks"
+    assert all(c["level"] == 2 for c in big)
+
+
+# --- mark_lead(): structural lead detection (contract "mark_lead") --------
+def test_mark_lead_does_not_mutate_inputs_and_returns_new_dicts():
+    """``mark_lead`` returns new dicts and never mutates the inputs."""
+    from interchange import mark_lead
+
+    inputs = [{"text": "x", "section": "preamble", "level": 0}]
+    out = mark_lead(inputs)
+    assert "lead" not in inputs[0], "inputs must not be mutated"
+    assert out[0]["lead"] is True
+    assert out[0] is not inputs[0]
+
+
+def test_mark_lead_preamble_plus_first_h1_are_lead_body_is_not():
+    """Preamble (level 0) plus the first H1 section (level 1) are lead; the following
+    body section is not."""
+    from interchange import mark_lead
+
+    out = mark_lead([
+        {"section": "preamble", "level": 0},
+        {"section": "Title", "level": 1},
+        {"section": "Body", "level": 2},
+    ])
+    assert [c["lead"] for c in out] == [True, True, False]
+
+
+def test_mark_lead_first_heading_h2_leaves_only_preamble_as_lead():
+    """A note whose first heading is level 2+ has only its preamble as lead."""
+    from interchange import mark_lead
+
+    out = mark_lead([
+        {"section": "preamble", "level": 0},
+        {"section": "Body", "level": 2},
+    ])
+    assert [c["lead"] for c in out] == [True, False]
+
+
+def test_mark_lead_second_h1_is_never_lead():
+    """A second level-1 heading later in the note is never lead."""
+    from interchange import mark_lead
+
+    out = mark_lead([
+        {"section": "preamble", "level": 0},
+        {"section": "First", "level": 1},
+        {"section": "Second", "level": 1},
+    ])
+    assert [c["lead"] for c in out] == [True, True, False]
+
+
+def test_mark_lead_first_h1_windows_all_lead_no_preamble():
+    """With no preamble, every window of the first H1 section is lead; the next
+    section breaks the run."""
+    from interchange import mark_lead
+
+    out = mark_lead([
+        {"section": "Title", "level": 1},
+        {"section": "Title", "level": 1},
+        {"section": "Body", "level": 2},
+    ])
+    assert [c["lead"] for c in out] == [True, True, False]
+
+
+def test_mark_lead_empty_list_returns_empty_list():
+    from interchange import mark_lead
+
+    assert mark_lead([]) == []

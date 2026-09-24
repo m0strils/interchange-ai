@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 
+import chromadb
 from pytest_bdd import given, parsers, scenario, then, when
 
 import interchange
@@ -64,6 +65,72 @@ def test_mode_all_table_columns():
           "The eval log record carries the passage and lead diagnostics")
 def test_log_record_carries_diagnostics():
     pass
+
+
+# --- Slice 3, step 1: structural lead detection (ADR-0017) -----------------
+@scenario("passage_eval.feature", "The preamble is a lead chunk")
+def test_preamble_is_lead():
+    pass
+
+
+@scenario("passage_eval.feature", "The first H1 is lead regardless of the filename")
+def test_first_h1_is_lead_regardless_of_filename():
+    pass
+
+
+@scenario("passage_eval.feature", "A later H1 is not lead")
+def test_later_h1_not_lead():
+    pass
+
+
+@scenario("passage_eval.feature",
+          "A note that starts with an H2 has only its preamble as lead")
+def test_h2_start_only_preamble_lead():
+    pass
+
+
+@scenario("passage_eval.feature", "lead_share prefers the metadata flag")
+def test_lead_share_prefers_metadata_flag():
+    pass
+
+
+@scenario("passage_eval.feature",
+          "The title heuristic still applies to metadata without the flag")
+def test_title_heuristic_without_flag():
+    pass
+
+
+@scenario("passage_eval.feature", "build_index stores the lead flag")
+def test_build_index_stores_lead_flag():
+    pass
+
+
+# --- recording stub Chroma client (the pattern from tests/test_apply_profile.py) ---
+class _RecordingCol:
+    """A stub Chroma collection that records the single ``add()`` build_index makes."""
+
+    def __init__(self):
+        self.added = None
+
+    def add(self, ids=None, documents=None, metadatas=None):
+        self.added = {"ids": ids, "documents": documents, "metadatas": metadatas}
+
+
+class _RecordingClient:
+    """A stub ``chromadb.PersistentClient``: delete is a no-op, create hands back a
+    fresh recording collection."""
+
+    last = None
+
+    def __init__(self, path=None):
+        pass
+
+    def delete_collection(self, name):
+        pass
+
+    def create_collection(self, name):
+        _RecordingClient.last = _RecordingCol()
+        return _RecordingClient.last
 
 
 # --- helpers ---------------------------------------------------------------
@@ -242,3 +309,67 @@ def log_record_diagnostics(context):
     record = json.loads(lines[-1])
     assert "passage_at_k" in record
     assert "lead_share" in record
+
+
+# --- Slice 3 step defs: mark_lead / lead_share flag / build_index ----------
+@given(parsers.parse('a note chunked as "{spec}"'))
+def note_chunked_as(context, spec):
+    """"preamble@0,Title@1,Body@2" -> [{"section","level"}, ...] for mark_lead."""
+    chunks = []
+    for part in spec.split(","):
+        section, _, level = part.partition("@")
+        chunks.append({"section": section, "level": int(level)})
+    context["chunks"] = chunks
+
+
+@given(parsers.parse('metadata chunks with sections and lead flags "{spec}"'))
+def meta_chunks_with_lead(context, spec):
+    """"Body=true,preamble=false" -> hits_meta carrying an explicit ``lead`` bool."""
+    metas = []
+    for part in spec.split(","):
+        section, _, lead = part.partition("=")
+        metas.append({"source": "n.md", "section": section, "title": "n",
+                      "lead": lead.strip().lower() == "true"})
+    context["hits_meta"] = metas
+
+
+@given(parsers.parse("a one-note corpus of frontmatter, an H1 and an H2 body, "
+                     "and a recording Chroma client"))
+def one_note_recording_corpus(context, tmp_path, monkeypatch):
+    note = (
+        "---\n"
+        "type: note\n"
+        "tags: [demo]\n"
+        "---\n"
+        "# A Heading Unlike The Filename\n\n"
+        "Intro line under the H1.\n\n"
+        "## Body\n\n"
+        "The real body content lives here.\n"
+    )
+    (tmp_path / "note.md").write_text(note, encoding="utf-8")
+    monkeypatch.setattr(interchange, "DOCS_DIR", tmp_path)
+    monkeypatch.setattr(chromadb, "PersistentClient", _RecordingClient)
+
+
+@when("I mark the lead chunks")
+def mark_the_lead(context):
+    context["marked"] = interchange.mark_lead(context["chunks"])
+
+
+@when("I build the index")
+def build_the_index(context):
+    interchange.build_index()
+    context["added"] = _RecordingClient.last.added
+
+
+@then(parsers.parse('the lead flags are "{spec}"'))
+def lead_flags_are(context, spec):
+    want = [s.strip().lower() == "true" for s in spec.split(",")]
+    assert [c["lead"] for c in context["marked"]] == want
+
+
+@then(parsers.parse('the recorded lead flags are "{spec}"'))
+def recorded_lead_flags_are(context, spec):
+    want = [s.strip().lower() == "true" for s in spec.split(",")]
+    metas = context["added"]["metadatas"]
+    assert [m["lead"] for m in metas] == want
