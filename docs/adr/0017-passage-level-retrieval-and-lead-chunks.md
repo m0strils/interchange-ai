@@ -1,6 +1,6 @@
 # ADR-0017: Passage-level retrieval quality and lead-chunk handling
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-09-24) — metric built and kept; lead detection kept; merge rejected on measurement
 - **Date:** 2026-09-23
 - **Deciders:** Jeff Lynch
 
@@ -199,3 +199,18 @@ intro as its own chunk; and re-window merged text at `CHUNK_CHARS` so the rerank
 bounded passages. Accept criteria unchanged from slice 3. Also on the list: the native
 `recursive_mutex` abort at interpreter exit after `--mode all` with the cross-encoder
 loaded (reproduced twice; output is complete before it; exit code is not).
+
+## Update 2026-09-24 — Accepted: metric and lead detection kept, merge reverted, problem carried by ADR-0018
+The passage-level eval (`expected_section`, `passage@k`, `lead share`) and structural
+lead detection (the `lead` chunk-metadata flag) **stay** — both proved useful and
+neither regressed a corpus number. The lead-chunk **merge is reverted** and not
+pursued: it did what it was designed to do (lead share fell everywhere) yet broke the
+reranker on vault and an exact match on rail, so ranking is the wrong place for the
+fix.
+
+The problem this ADR found is real and **unsolved by ranking**: retrieval finds the
+right note but the assembled top-4 is the wrong slice of it — whole-note questions
+never fit and section questions lose to the lead chunk. That problem is re-stated and
+carried forward by **[ADR-0018](0018-context-assembly-with-a-budget.md)**, which
+separates the unit of retrieval from the unit of context (two-pass budgeted
+assembly), leaving this ADR's ranking, chunking and reranker untouched as the control.

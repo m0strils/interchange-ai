@@ -112,6 +112,8 @@ class PinRef(BaseModel):
 
 
 class AskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     q: str = Field(..., max_length=8000, examples=["what is an 824?"])
     corpus: str | None = None
     mode: Mode | None = Field(None, examples=["hybrid"])
@@ -434,12 +436,20 @@ def _preflight(request: Request, correlation_id: str, corpus, mode, k, rerank,
             return None, None, _error("rate_limited", 429, correlation_id,
                                       "rate limit exceeded", retry_after=retry)
 
-        if resolved["rerank_backend"] == "typesafe" and policy.budget_exceeded():
+        # The daily budget gates every *metered* path, not just metered rerank:
+        # `api` generation is billed too (its cost is `measured`, so review #2's
+        # ledger check must see it). `stub` and `claude-code` are $0 and never gate.
+        metered: list[str] = []
+        if default_engine() == "api":
+            metered.append("generation")
+        if resolved["rerank_backend"] == "typesafe":
+            metered.append("rerank")
+        if metered and policy.budget_exceeded():
             enterprise.audit(question="", model=interchange.MODEL, sources=[], in_tokens=0,
                              out_tokens=0, latency_ms=0, grounded=False,
                              blocked="budget", engine=default_engine())
             return None, None, _error("budget_exceeded", 429, correlation_id,
-                                      "daily metered budget exceeded")
+                                      f"daily metered budget exceeded ({' and '.join(metered)})")
         return resolved, caller, None
     finally:
         enterprise.CALLER.reset(ctoken)

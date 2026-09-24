@@ -219,11 +219,21 @@ def reset_semaphore() -> None:
 
 
 # --- metered daily budget (from the audit ledger) --------------------------
-def estimated_spend_today() -> float:
-    """Sum of ``cost_usd`` over today's audit rows labelled ``telemetry=="estimated"``.
+def spend_today() -> float:
+    """Sum of ``cost_usd`` over today's audit rows that were **actually billed** —
+    every row whose ``marginal_usd > 0`` (``api`` generation and metered rerank).
 
-    The budget is enforced against the same honest ledger ``--audit`` reports, so a
-    day's metered spend cannot exceed ``INTERCHANGE_METERED_BUDGET_USD`` (review #2).
+    This is the honest daily metered spend the budget is enforced against, read
+    from the same ledger ``--audit`` reports, so a day's metered spend cannot exceed
+    ``INTERCHANGE_METERED_BUDGET_USD`` (review #2).
+
+    Prior to the 2026-09-24 plan review this summed only ``telemetry == "estimated"``
+    rows (defect #1). The ``api`` engine reports ``telemetry: "measured"`` whenever
+    real token usage is present, so genuine API generation cost — the largest metered
+    line — was silently excluded and never counted against the budget. Keying on
+    ``marginal_usd`` (what the ledger records as actually paid) counts measured API
+    rows and estimated metered-rerank rows alike, and still ignores subscription rows
+    ($0 marginal).
     """
     path = enterprise.AUDIT_PATH
     if not path.exists():
@@ -238,13 +248,24 @@ def estimated_spend_today() -> float:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if row.get("telemetry") == "estimated" and str(row.get("ts", "")).startswith(today):
+        if (row.get("marginal_usd", 0) or 0) > 0 and str(row.get("ts", "")).startswith(today):
             total += row.get("cost_usd", 0) or 0
     return total
 
 
+def estimated_spend_today() -> float:
+    """Deprecated alias for :func:`spend_today`.
+
+    The old name is a misnomer: the budget counts every *billed* row
+    (``marginal_usd > 0``), measured or estimated — not only ``telemetry ==
+    "estimated"`` ones (defect #1, 2026-09-24 plan review). New code should call
+    :func:`spend_today`; this alias is kept for existing callers.
+    """
+    return spend_today()
+
+
 def budget_exceeded() -> bool:
-    return estimated_spend_today() >= metered_budget_usd()
+    return spend_today() >= metered_budget_usd()
 
 
 # --- error catalogue (review #11) ------------------------------------------
