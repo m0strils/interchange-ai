@@ -1611,8 +1611,14 @@ def _generate_claude_code(user_content: str) -> dict:
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
     try:
         proc = subprocess.run(
+            # --strict-mcp-config with no --mcp-config: no MCP servers load, so a
+            # pure text-generation session can't try (and be denied) the machine's
+            # user-scope connectors and answer with connector chatter (2026-09-23).
+            # --tools "" disables all built-in tools (claude --help, 2.1.267;
+            # verified once at $0 on the subscription).
             ["claude", "-p", user_content, "--append-system-prompt", system_prompt(),
-             "--output-format", "json", "--setting-sources", "user"],
+             "--output-format", "json", "--setting-sources", "user",
+             "--strict-mcp-config", "--tools", ""],
             capture_output=True, text=True, timeout=CLAUDE_CODE_TIMEOUT_S,
             cwd=headless_cwd(),
         )

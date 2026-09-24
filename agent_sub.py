@@ -138,6 +138,10 @@ def answer_agentic_sub(question: str, explain: bool = False) -> str:
         "--append-system-prompt", prompt,
         "--output-format", "json",
         "--setting-sources", "user",
+        # Only the --mcp-config interchange server loads; the machine's user-scope
+        # MCP servers (Obsidian vaults) never enter this session even though the
+        # allow-list already blocks their use, so they cost no context (2026-09-23).
+        "--strict-mcp-config",
     ]
     if explain:
         _explain(f"stage 2 launching headless Claude Code on your subscription "
