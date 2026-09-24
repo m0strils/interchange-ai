@@ -270,3 +270,13 @@ intended — they're where the retriever's semantics (not just keyword overlap) 
 tested. If a future retrieval change makes the 824 cases fragile, that's a signal to
 revisit whether single-source ground truth is still the right model, or whether these
 should switch to the list form that `hit_at_k` supports.
+
+
+## The graded eval measures the governed path
+
+`--grade` (ADR-0008) generates through `interchange.answer_detail(audit=False)`, so persona,
+profile retrieval mode and context assembly (ADR-0018) all apply and no audit row is
+written. A pre-ADR-0018 hand-rolled reproduction scored the brain corpus at 40% while the
+live answers contained every rubric fact; the governed path scores 93%. A graded set is a
+JSONL file of `question` + `expected_facts` (case-insensitive substrings); keep personal
+sets outside the repo, e.g. `~/.interchange/graded-brain.jsonl`.

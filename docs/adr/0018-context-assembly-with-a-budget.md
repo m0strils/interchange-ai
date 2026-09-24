@@ -1,6 +1,6 @@
 # ADR-0018: Context assembly with a budget — the retrieval unit is not the context unit
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-09-24; measured — see Updates)
 - **Date:** 2026-09-24
 - **Deciders:** Jeff Lynch
 
@@ -380,3 +380,50 @@ default: hit@1 17/25, hit@4 25/25, passage@4 3/6, lead 0.30 (identical to the co
 hybrid row); **context@4 7/7, note@4 21/24, mean chars 12,961, max 19,761**; 43 whole,
 24 fallbacks, 0 secret drops, 11 budget hits. No pre-registered expectation was changed.
 Slice D (wiring) proceeds on this configuration; slice E re-measures it live.
+
+## Update 2026-09-24 — slices D and E: wired, measured on every surface, Accepted
+Slice D (a18c121) wired assembly into `answer_detail` behind one resolver (argument >
+collection profile > default, clamped by policy; `chunks` when pinned or on any failure),
+made `sources` the included set with `hit_sources` recorded separately, added the
+mode-independent `context` block to the retrieve frame, the HTTP response and done event,
+the audit row and an OTel `assemble` span, locked the HTTP `context` knob by default
+(`INTERCHANGE_UNLOCKED` opens it; `/options` reports the lock), pinned `search_docs` to
+`chunks`, and fixed A2A to resolve the profile's retrieval mode. The `chunks` explain
+transcript is byte-identical; a second locked baseline covers `notes`; a test pins the
+scored `Retrieval` record equal before and after assembly. Known remaining mismatch,
+recorded: the HTTP surface keeps its request/policy-driven retrieval mode (default
+`hybrid`) rather than the profile's, to keep the existing lock semantics; brain's mode
+is `hybrid`, so it has no effect there; vault over HTTP runs `hybrid` not `hybrid+rerank`.
+
+**Slice E, measured** (k=4, pool 20; brain profile `hybrid`/`notes`/20,000/16,000):
+
+| gate | required | measured | result |
+|---|---|---|---|
+| rail hit@1 / hit@4 | 14/14 unchanged | 14/14, 14/14 (context n/a, mean 1,508 chars) | pass |
+| vault hit@1 (`chunks`) | 15/18 unchanged | 15/18 (mean 1,892 chars) | pass |
+| brain ranking columns | identical to control | hit@1 17/25, hit@4 25/25, passage@4 3/6, lead 0.30; **0 per-row rank differences** vs the pre-wiring chunks run | pass |
+| brain context@4 | ≥ 6/7, both whole-note rows | **7/7** | pass |
+| brain note@4 | ≥ 5 of eligible | **21/24** | pass |
+| mean assembled chars | < 14,000 | **12,961** (max 19,761) | pass |
+| headless input tokens, mean of 3 live | < 15,000 | **14,615** (16,614 / 15,744 / 11,486; baseline 9,851) | pass on the mean; two single runs over |
+| live answers grounded | 3/3 | 3/3, `grounded` true in the audit rows | pass |
+| graded answers (3-row pre-registered rubric, `~/.interchange/graded-brain.jsonl`) | pass | **answer-correctness 93%** (0.80 / 1.00 / 1.00), **faithfulness 97%** | pass |
+
+Live detail: the five-practices question now lists five practices with an evidence trail
+(4 notes, 33 chunks, 19.4k chars, 14.6 s, shadow cost $0.068 at $0 marginal); the
+checklist-memory question quotes the three Memory items (25 chunks, 17.5k chars, 6.8 s);
+the fork question gives the reasoning from the decision note (12 chunks, 6.3k chars,
+9.7 s). Assembly itself costs 2–3 ms; generation dominates latency. The shadow-cost line
+roughly tripled on the context term, as ADR-0004's honesty rule expects to see recorded.
+
+**A defect the gate found.** The first graded run scored 40% / 56%: `eval_judge._generate`
+reproduced the pre-ADR-0018 path by hand (raw top-k chunks, no persona, no assembly, no
+included-sources grounding) and so graded a context no surface builds any more. Fixed in
+68e7eb0: the judge now calls `answer_detail(audit=False)` and grades the governed path
+(ADR-0008 updated). The 40% is kept here as the honest "before" of the same three answers.
+
+**Follow-ups (P2, not blocking):** replace the judge's scoped audit-path redirect with an
+explicit write flag on `enterprise.audit`; HTTP retrieval mode from the profile once the
+lock semantics are extended to it; the P2 checklist from the plan (stdin prompt, snapshot
+threading, cache bound and build stamp, overlay deep-merge). The `research` corpus stays on
+`chunks` until a retrieved-text injection scan exists. The brain corpus freeze is lifted.

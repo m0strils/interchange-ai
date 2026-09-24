@@ -1,7 +1,8 @@
 # Status (reprinted after compaction)
 
-Goal: ADR-0018 (context assembly with a budget) on `feature/passage-eval` (stacked on feature/corpus-profiles). Order is measure-before-wire: A freeze+budget -> B assembler -> C eval on stub -> D wire -> E measure -> F accepted. No main merge, no public deploy.
-Gate: `.venv/bin/python -m pytest -q`; `.claude/skills/verify-change/check.sh` + `weakened-tests.sh dev` before each commit; commit per slice with the ADR number.
-Done (2026-09-24): ADR-0017 Accepted (metric kept, lead detection kept, merge rejected). ADR-0018 Proposed with review fixes folded in (pins never assemble; sources from included set; two-pass seed+expand; ALL-of `expected_sections_all`; research out of scope; metered budget counts every billed row; AskRequest extra=forbid). Slice A committed 2d3e1e7 (322 tests). Golden frozen: 25 rows / 7 section rows, sha256 b92dca86...; corpus frozen at 31 files / 513 chunks (People/Interviews ignored). Control (hybrid+rerank): hit@1 17/25, hit@4 22/25, passage@4 2/6, lead 0.25.
-Current: Slice B (pure assembler + chunk map + profile keys + policy clamps + fake_snapshot) in a coder run. Then C, D, E per the plan in ~/Documents/Brain/20-Projects/interchange-ai/2026-09-24-plan-context-assembly.md.
-Rules: never edit the gates, eval/golden.jsonl, or weaken existing tests; do not write new notes into ~/Documents/Brain until Slice E is measured (corpus freeze); research corpus stays on `chunks`.
+Goal: ADR-0018 done on `feature/passage-eval` (stacked on feature/corpus-profiles). Next: merge both branches to `dev` (--no-ff) when the owner says so. No main merge, no public deploy.
+Gate: `.venv/bin/python -m pytest -q` (374); `.claude/skills/verify-change/check.sh` + `weakened-tests.sh dev` before each commit; commit per slice with the ADR number.
+Done (2026-09-24): ADR-0017 Accepted (metric kept, merge rejected). ADR-0018 Accepted: fair-share context assembly wired on every surface; brain profile hybrid/notes/20000/16000 -> context@4 7/7, note@4 21/24, mean chars 12,961, 0 per-row ranking changes, rail 14/14 and vault 15/18 unchanged, live answers grounded, graded 93%/97%. Judge fixed to grade the governed path (was 40%). onnxruntime telemetry off (exit-time abort, 9b94d3c; same fix on compliance-rag feature/ort-telemetry).
+Frozen artifacts: golden-brain.jsonl sha256 b92dca86... (25 rows / 7 section rows); graded-brain.jsonl (3 rows). Corpus freeze on ~/Documents/Brain is LIFTED.
+Follow-ups (P2): explicit audit write flag; HTTP retrieval mode from profile; stdin prompt; snapshot threading; cache bound + build stamp; overlay deep-merge; research stays on chunks until an injection scan exists.
+Rules: never edit the gates, eval/golden.jsonl, or weaken existing tests.

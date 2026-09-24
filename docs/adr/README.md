@@ -38,7 +38,7 @@ one and both stay in the log.
 | [0015](0015-browser-workbench-surface.md) | Browser workbench over the same governed pipeline — scored retrieval, policy tier, streamed stages | Accepted → **vendored no-build Preact at `/ui`, `POST /ask/stream` SSE, env-is-policy** |
 | [0016](0016-corpus-profiles-as-portable-data.md) | Corpus profiles as portable data — overlay, index dir, persona, retrieval, tools | Accepted → **`INTERCHANGE_PROFILES` overlay, `INTERCHANGE_CHROMA_DIR`, `--profile`, per-profile persona/retrieval/tools** |
 | [0017](0017-passage-level-retrieval-and-lead-chunks.md) | Passage-level retrieval quality and lead-chunk handling — metric before fix | Accepted → **metric + lead detection kept; merge rejected on measurement (carried by 0018)** |
-| [0018](0018-context-assembly-with-a-budget.md) | Context assembly with a budget — the retrieval unit is not the context unit | Proposed → **two-pass budgeted note assembly over chunk-level hits** |
+| [0018](0018-context-assembly-with-a-budget.md) | Context assembly with a budget — the retrieval unit is not the context unit | Accepted → **two-pass fair-share assembly, `notes` on brain (7/7 context@4, 93% graded), HTTP knob locked by default, judge grades the governed path** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
