@@ -158,3 +158,44 @@ One operational note: the brain `--mode all` run printed its table and then abor
 interpreter exit with a native `recursive_mutex lock failed` from library teardown
 (cross-encoder + Chroma in one process); the numbers above were printed before it.
 Tracked, not fixed here.
+
+## Update 2026-09-23 — slice 3 step 2 measured and reverted; slice 3b opened
+The lead-chunk merge (965e326: fold preamble + first H1 into the first body chunk when
+the lead is ≤ 600 chars) was built, every corpus rebuilt, and the four gates measured
+(k=4, pool 20, rerank_n 30, cross-encoder):
+
+| corpus | mode | hit@1 before → after | hit@4 | passage@4 | lead share | gate |
+|---|---|---:|---:|---:|---:|---|
+| rail | hybrid | 14/14 → **13/14** | 14/14 | n/a | 0.18 → 0.04 | **fail** |
+| vault | hybrid+rerank | 15/18 → **12/18** | 15/18 → 14/18 | n/a | 0.08 → 0.04 | **fail** |
+| vault | hybrid (control) | 11/18 → 11/18 | 14/18 → 14/18 | n/a | 0.06 → 0.04 | held |
+| brain | hybrid+rerank (default) | 18/25 → 19/25 | 22/25 → 22/25 | 3/6 → **3/6** | 0.26 → 0.12 | **fail** |
+| brain | hybrid | 19/25 → 17/25 | 25/25 → 23/25 | 3/6 → 4/6 | 0.28 → 0.13 | — |
+
+Chunk counts after the merge: rail 12 → 10, vault 4,614 → 4,308 (159 notes merged), brain
+485 → 454 (20 merged); rebuilds 0.3 / 27.3 / 3.1 s. The live five-practices question still
+answered with pointers and no practices; its top-4 now included the plan note that
+*describes* this very bug, which is a self-referential trap any corpus of working notes
+carries.
+
+**Reading.** Lead share fell on every corpus, so the merge did exactly what it was designed
+to do — and the corpus-level numbers got worse where the reranker is in play. The vault
+`hybrid` control held while `hybrid+rerank` lost three rows, which points at the merged
+chunks themselves: longer texts (lead + body, not re-windowed) give the cross-encoder less
+focused passages, and on rail the merge cost one exact-match row. The one gain (brain
+`hybrid` passage@4 3/6 → 4/6) was not in the profile's default mode. Three of four gates
+failed; the merge is **reverted** (66beeee), the store rebuilt on the reverted code, and
+the pre-merge numbers reproduce (rail 14/14, vault 15/18, brain 18/25, passage@4 3/6,
+lead share 0.26).
+
+**Kept.** Structural lead detection (`lead` metadata, step 1) and the passage-level eval.
+
+**Slice 3b, triggered by this table:** same-note neighbour expansion at query time — when a
+top hit is a lead chunk, also score the next chunk(s) of the same source and let the
+fused/reranked list decide. Zero ingest change, no long chunks for the reranker, and the
+expansion can be a profile `retrieval` key so rail is untouched. Two cheaper variants to
+measure alongside it: merge the *preamble only* (frontmatter, ~190 chars) and leave the H1
+intro as its own chunk; and re-window merged text at `CHUNK_CHARS` so the reranker sees
+bounded passages. Accept criteria unchanged from slice 3. Also on the list: the native
+`recursive_mutex` abort at interpreter exit after `--mode all` with the cross-encoder
+loaded (reproduced twice; output is complete before it; exit code is not).
