@@ -15,6 +15,7 @@ Usage (wired into interchange.py):
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import pathlib
 import re
@@ -22,6 +23,11 @@ import time
 import uuid
 
 AUDIT_PATH = pathlib.Path(__file__).parent / "audit.jsonl"
+
+# Who is asking. Set by a calling surface (the HTTP API / an A2A peer) so the
+# audit row records the caller identity; None on the CLI path. A ContextVar
+# keeps it request-scoped without threading an argument through the pipeline.
+CALLER: contextvars.ContextVar[str | None] = contextvars.ContextVar("caller", default=None)
 
 # --- 1) input guardrail (OWASP LLM01: prompt injection) --------------------
 # Heuristic first line of defense. Enterprise stack layers this with a
@@ -105,6 +111,8 @@ def audit(
     engine: str = "api",
     telemetry: str = "measured",
     cost_usd: float | None = None,
+    context: dict | None = None,
+    hit_sources: list[str] | None = None,
 ) -> dict:
     """Append a governance record for this request; return it (ADR-0004).
 
@@ -112,6 +120,13 @@ def audit(
     cost_usd:  the API-equivalent cost when known (e.g. `claude -p` total_cost_usd);
                if None it's computed from the token counts. On subscription engines
                this is the *shadow* cost — real resource use, but $0 marginal to you.
+    context:   the mode-independent context-assembly block (ADR-0018:
+               {mode, chunks_in, chunks_out, chars, budget_hit, fallbacks,
+               dropped_hits, secret_drops, assemble_ms}); None for callers that
+               assemble no context (guardrail blocks, rate-limit/budget refusals).
+    hit_sources: the retrieved hits' sources, separate from ``sources`` (which follows
+               the INCLUDED set once assembly can drop a ranked note — review finding #2).
+    Both keys are always written (default None) so every row shares one shape.
     """
     shadow = cost_usd if cost_usd is not None else estimate_cost(model, in_tokens, out_tokens)
     marginal = shadow if engine == "api" else 0.0
@@ -123,6 +138,8 @@ def audit(
         "engine": engine,
         "telemetry": telemetry,
         "sources": sources,
+        "hit_sources": hit_sources,
+        "context": context,
         "in_tokens": in_tokens,
         "out_tokens": out_tokens,
         "cost_usd": round(shadow, 6),        # API-equivalent (shadow) cost
@@ -130,6 +147,7 @@ def audit(
         "latency_ms": latency_ms,
         "grounded": grounded,
         "blocked": blocked,
+        "caller": CALLER.get(),
     }
     with AUDIT_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")

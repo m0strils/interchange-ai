@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Nightly full reindex of one corpus profile (ADR-0016 freshness sub-decision).
+
+  This job is read-only against the corpus: it re-embeds the source files into the
+  local Chroma store and writes nothing back to the notes. It runs entirely on the
+  local embedding model with no metered generation call, so its marginal cost is $0.
+
+  This is a template. `scripts/launchd/install.sh PROFILE` substitutes the
+  double-underscore placeholders below and installs the result into
+  ~/Library/LaunchAgents; the template itself carries no home path or user name so
+  it is safe to commit.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.interchange.reindex-__PROFILE__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd __REPO__ &amp;&amp; INTERCHANGE_CHROMA_DIR=__CHROMA__ INTERCHANGE_PROFILES=__PROFILES__ .venv/bin/python interchange.py --profile __PROFILE__ --reindex</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__LOG__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG__</string>
+</dict>
+</plist>

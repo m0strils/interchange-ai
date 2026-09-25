@@ -33,3 +33,8 @@ Feature: Governed answers
     And the audit in_tokens equal 21137
     And the audit marginal_usd is 0
     And the audit model is "claude-opus-4-8"
+
+  Scenario: The subscription engine runs the headless session outside the calling repository
+    Given the subscription CLI reports usage input 2, cache_creation 21135, cache_read 0, output 40, total_cost 0.21, model "claude-opus-4-8" and a result citing "x12-overview.md"
+    When I run the agentic subscription answer for "what is a 214?"
+    Then the headless session ran outside the calling repository

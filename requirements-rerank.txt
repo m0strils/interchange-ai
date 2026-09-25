@@ -1,0 +1,21 @@
+# Optional reranker deps (ADR-0007 trigger / ADR-0014) — install ONLY to run the
+# `hybrid+rerank` retrieval mode:
+#   pip install -r requirements-rerank.txt
+#
+# Deliberately NOT in requirements.txt or requirements-dev.txt: the local backend
+# pulls torch + transformers (heavy) and would bloat every clone's pre-push env.
+# Reranking never runs in the offline pytest gate — the scorers import their
+# backend lazily, inside the function, so the gate never touches these (ADR-0014).
+#
+# Local backend selection (INTERCHANGE_RERANK, default "cross-encoder"):
+#   The default LOCAL backend is the sentence-transformers CrossEncoder below —
+#   $0, offline after the model downloads once. On this venv (Python 3.14) torch
+#   2.14 ships a wheel, so the cross-encoder installs and is the working default;
+#   only IT is listed here. If a torch-less environment can't build it, swap this
+#   line for `flashrank` (ONNX, no torch) and set INTERCHANGE_RERANK=flashrank.
+sentence-transformers>=5   # LOCAL cross-encoder ms-marco-MiniLM-L-6-v2 — $0, offline, measured
+
+# Metered, opt-in backend (INTERCHANGE_RERANK=typesafe): TypeSafe System One scores
+# one calibrated Noul per (question, passage) pair. Costs money and is labelled
+# `estimated` (ADR-0004); never runs in the gate and never without TYPESAFE_API_KEY.
+typesafe-sdk               # METERED reranker backend — see .env.example (TYPESAFE_API_KEY)

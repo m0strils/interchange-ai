@@ -96,3 +96,18 @@ refusal-correctness was redefined as **faithfulness == 1.0 on the unanswerable r
 which scores the good refusal 1.0 and the hallucinated answer < 1.0. This is the
 honest-telemetry rule in action: a metric that mis-scored real output was corrected
 before it shipped, and the record keeps the road not taken.
+
+## Update 2026-09-24
+The judge now grades the **governed answer path** — the profile-resolved retrieval
+mode, persona, context assembly (ADR-0018) and included-source grounding — by calling
+`interchange.answer_detail(question, engine=engine, audit=False)`, instead of a
+hand-rolled reproduction (`retrieve` → top-k chunk join → engine → `guard_output`).
+That reproduction predated ADR-0018 and measured a context **no surface builds any
+more**: a `--grade` run on the `brain` profile scored 0.20 / 1.00 / 0.00 while the live
+pipeline's answers to the same questions plainly contained every rubric fact — the
+judge was grading the old behaviour. The new `audit=False` flag runs the identical
+pipeline but suppresses only the audit-row write, so **grade runs still write no audit
+rows** (they keep their own `eval/grade-runs.jsonl`) and don't skew the per-request
+`--audit` dashboard; the returned record is otherwise unchanged. The assembled context
+the engine actually saw rides back on that grade call as `context_text`, kept off the
+audited path so the HTTP response schema (which forbids extra keys) is untouched.

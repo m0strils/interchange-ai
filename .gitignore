@@ -1,12 +1,25 @@
 # secrets — never commit
 .env
 
+# key material: no PEM is tracked except the public Agent Card verification
+# key, which is *meant* to ship (clients pin it). A private key belongs in an
+# environment variable (A2A_SIGNING_KEY_PEM), never in the tree.
+*.pem
+!*.pub.pem
+
 # runtime artifacts
 .chroma/
 audit.jsonl
-eval/grade-runs.jsonl
+eval/*-runs.jsonl
 __pycache__/
 .venv/
 
 # pytest
 .pytest_cache/
+
+# macOS
+.DS_Store
+
+# scratch drafts (ADR-0015 gate) + working state (regenerated locally)
+eval/*.DRAFT-NOTES.md
+.claude/STATUS.md

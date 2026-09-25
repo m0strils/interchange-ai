@@ -30,7 +30,15 @@ def real_corpus(context):
     source filename alongside its text — two parallel lists indexed together."""
     corpus_texts: list[str] = []
     sources: list[str] = []
-    for path in sorted(interchange.DOCS_DIR.glob("*.md")):
+    # Recursive, ignore-aware discovery (the ingest path build_index() uses),
+    # narrowed to Markdown. On the flat seed corpus this yields exactly the
+    # files the old ``DOCS_DIR.glob("*.md")`` did, in the same order.
+    md_files = [
+        path
+        for path in interchange.discover_files(interchange.DOCS_DIR)
+        if path.suffix.lower() == ".md"
+    ]
+    for path in md_files:
         for piece in interchange.chunk(path.read_text()):
             corpus_texts.append(piece["text"])
             sources.append(path.name)

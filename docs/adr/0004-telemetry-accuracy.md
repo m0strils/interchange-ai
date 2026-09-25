@@ -77,3 +77,52 @@ to `--output-format json`); the API paths are already measured.
 - Small changes: `audit()` gains a `telemetry` flag; the two subscription call sites
   and `audit_summary()` updated; `--explain` shows the flag.
 - No new metered API spend (honors ADR-0003).
+
+## Update — 2026-09-22
+Both `claude -p` call sites (`interchange._generate_claude_code`, `agent_sub`) ran in
+the **caller's** working directory. Launched from inside a repo with a `.claude/` Stop
+hook, the child session ran the hook (the pytest gate) and returned **hook commentary**
+in place of the answer — measured telemetry over the wrong text, flagged UNGROUNDED;
+from `/tmp` the same question answered correctly. Fix: both now run in a repo-free
+`interchange.headless_cwd()` and pass `--setting-sources user`, so no project settings
+or hooks load. Telemetry stays measured; the number now covers the real answer.
+
+## Update — 2026-09-23 (observed; fix in progress)
+The **same failure class** as the 2026-09-22 update — the headless generation
+session picking up ambient config and returning *it* in place of the answer — has a
+second source, so this update lands on the ADR that owns that story rather than a new
+one. `--setting-sources user` loads user settings, and **that pulls in every MCP
+server in `~/.claude.json`**. These are **user-scope MCP servers** (on the reference machine, two Obsidian
+connectors). `interchange._generate_claude_code` runs `claude -p` with no MCP
+restriction, so both servers load into a session that should only generate text from
+the context it was handed: the model spends tokens on their tool descriptions,
+attempts calls, is denied, and narrated *"both Obsidian connectors were denied"*
+instead of answering the five-practices question (observed 2026-09-23). `agent_sub.py`
+passes `--mcp-config` for the interchange server plus an `--allowedTools` allow-list,
+but **without `--strict-mcp-config` the user-scope servers still load** and cost
+context even though the allow-list blocks their use.
+
+**Fix in progress (Slice 1 of the lead-chunks plan), flags to be confirmed by that
+slice** — not yet landed, not yet verified:
+- `--strict-mcp-config` on **both** paths, so only servers named by `--mcp-config`
+  load (and with no `--mcp-config`, none). The RAG path then loads **zero** MCP
+  servers; the agent path loads **only** the interchange server.
+- A **tool-free** generation session for the RAG path via `--tools ""` **if a manual
+  $0 check confirms** it yields a session with no built-in tools; otherwise
+  `--disallowedTools` for the file/shell built-ins that could read the machine
+  (`Read`, `Bash`, `Edit`, `Write`, `Glob`, `Grep`, `WebFetch`, `WebSearch`). Which
+  one shipped will be recorded here once Slice 1 verifies it.
+
+Claude Code 2.1.267 documents both `--strict-mcp-config` and `--tools`. Telemetry is
+unaffected — this is the runtime's **tool surface**, not its usage accounting; it is
+recorded here because it is the direct continuation of the 2026-09-22 headless-hygiene
+finding on the same `claude -p` runtime.
+
+**Confirmed 2026-09-23 (slice 1 landed, merge 8a5b2c9).** The RAG engine now passes
+`--strict-mcp-config` and `--tools ""` (an empty tool list is the documented
+"disable all tools" form in Claude Code 2.1.267; verified once at $0: `is_error`
+false, no permission denials, one turn); the subscription agent passes
+`--strict-mcp-config` so only its `--mcp-config` server loads. **Measured** on the
+same question, same corpus, same engine: the headless session's reported input
+fell from 31,880 to 9,851 tokens and the answer no longer mentions connectors.
+Offline scenarios pin the argv (`features/headless_hygiene.feature`).

@@ -6,7 +6,7 @@ so every run is offline, free, and deterministic (never calls a live model).
 
 Stub seams (per the shared contract):
   * RAG:          fake engine injected into ``interchange.ENGINES["api"]`` +
-                  ``interchange.retrieve`` patched to a canned passage.
+                  ``interchange.retrieve_detail`` patched to a canned passage.
   * Subscription: ``agent_sub.subprocess.run`` returns a canned ``claude -p`` JSON
                   and ``agent_sub.shutil.which`` reports the CLI as installed.
 
@@ -16,12 +16,13 @@ tmp file by the autouse fixture in conftest.py).
 from __future__ import annotations
 
 import json
+import pathlib
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
 import agent_sub
 import interchange
-from tests.conftest import last_audit_row
+from tests.conftest import fake_retrieval, last_audit_row
 
 scenarios("governed_answers.feature")
 
@@ -46,8 +47,11 @@ def fresh_audit_log(context, isolated_audit_log):
 
 @given(parsers.parse('the knowledge base returns a passage from "{source}"'))
 def kb_returns_passage(context, monkeypatch, source):
-    passage = ("An 824 reports application errors.", {"source": source, "chunk": 0})
-    monkeypatch.setattr(interchange, "retrieve", lambda q: [passage])
+    monkeypatch.setattr(
+        interchange, "retrieve_detail",
+        lambda q, **kw: fake_retrieval(
+            {"source": source, "text": "An 824 reports application errors.", "chunk": 0}),
+    )
     context["source"] = source
 
 
@@ -84,8 +88,14 @@ def subscription_cli_usage(context, monkeypatch, input_tokens, cache_creation,
             model: {"costUSD": total_cost, "outputTokens": output_tokens},
         },
     })
-    monkeypatch.setattr(agent_sub.subprocess, "run",
-                        lambda *a, **k: FakeProc(stdout=canned))
+    def fake_run(*a, **k):
+        # record argv/cwd so the "runs outside the repo" scenario can assert on them,
+        # while still returning the same canned proc the telemetry scenario needs.
+        context["sub_argv"] = a[0] if a else k.get("args")
+        context["sub_cwd"] = k.get("cwd")
+        return FakeProc(stdout=canned)
+
+    monkeypatch.setattr(agent_sub.subprocess, "run", fake_run)
     monkeypatch.setattr(agent_sub.shutil, "which", lambda name: "/usr/bin/claude")
 
 
@@ -173,3 +183,16 @@ def audit_marginal(context, n):
 @then(parsers.parse('the audit model is "{model}"'))
 def audit_model(context, model):
     assert last_audit_row()["model"] == model
+
+
+# --- Then: headless session isolation --------------------------------------
+@then("the headless session ran outside the calling repository")
+def headless_outside_repo(context):
+    """The recorded `cwd` is the repo-free headless temp dir, not the repo (whose
+    project hooks would otherwise hijack the child session's reply)."""
+    cwd = pathlib.Path(context["sub_cwd"])
+    assert cwd.exists()
+    repo = pathlib.Path(interchange.__file__).parent.resolve()
+    resolved = cwd.resolve()
+    assert resolved != repo and repo not in resolved.parents
+    assert context["sub_cwd"] == interchange.headless_cwd()

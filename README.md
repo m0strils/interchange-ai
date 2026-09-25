@@ -56,8 +56,10 @@ python interchange.py --audit                        # governance/cost summary
 ```
 
 Embeddings run locally (Chroma's default model) — the only external call is
-generation (Claude). Drop your own `.md`/`.txt` domain docs into `docs/` and
-re-index; the included files are illustrative seed content.
+generation (Claude). Drop your own `.md`/`.txt`/`.pdf` domain docs into `docs/`
+and re-index; the included files are illustrative seed content. PDF text
+extracts flat (via `pypdf`, BSD — [ADR-0010](docs/adr/0010-document-ingestion-formats.md)),
+so PDF chunks land in the `"preamble"` section rather than under a heading.
 
 ### Engines (cost control)
 Generation is pluggable — an enterprise pattern (model/provider routing) in miniature:
@@ -69,14 +71,77 @@ python interchange.py --engine claude-code --ask "..." # headless Claude Code on
 
 `--engine api` gives exact token/cost telemetry and is the standard production
 pattern. `--engine claude-code` shells out to `claude -p`, billing nothing extra
-if you have a Claude subscription (token counts are estimated; shares your
-subscription's usage limits). The audit log records which engine served each
+if you have a Claude subscription (tokens and an API-equivalent shadow cost are
+measured from the CLI's JSON, ADR-0004; $0 marginal; shares your subscription's
+usage limits). The audit log records which engine served each
 request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
+
+### Profiles (corpora as data, ADR-0016)
+Two corpora ship in-repo: **`rail`** (this repo's EDI/rail docs) and **`hotel`** (a
+self-authored demo). Point the runtime at either without touching code:
+
+```bash
+make reindex PROFILE=rail && make eval PROFILE=rail K=4   # committed EDI/rail corpus
+make a2a-demo PROFILE=hotel                               # committed hotel-policy demo
+```
+
+Add a **personal** corpus in a private overlay that is never committed — three lines in
+`~/.interchange/profiles.yaml`:
+
+```yaml
+mynotes:
+  docs_dir: /path/to/my/notes
+  golden: ~/.interchange/golden-mynotes.jsonl   # personal eval set, kept outside the repo
+```
+
+then `python interchange.py --profile mynotes --reindex`. The committed `vault` profile
+is a generic *shape* (env-provided `docs_dir`, generic Obsidian ignores, no `golden`);
+overlay it with your own `docs_dir` and `golden:` the same way.
+
+### Browser workbench (`/ui`)
+A same-origin browser surface over the *same* governed pipeline: ask a question,
+see the retrieved evidence ranked with its **real scores** (dense `l2` distance,
+raw BM25, fused RRF, and the reranker score when enabled), watch the pipeline
+stream stage by stage, and read the grounded answer — the CLI's guardrails, audit
+row, and honest telemetry, unchanged ([ADR-0015](docs/adr/0015-browser-workbench-surface.md),
+[Lesson 08](lessons/08-browser-workbench.md)).
+
+```bash
+INTERCHANGE_ENGINE=stub python -m uvicorn app:app   # no API key, no metered call
+# then open http://localhost:8000/ui/
+curl -s localhost:8000/options | python -m json.tool           # the policy document
+curl -sN -X POST localhost:8000/ask/stream \
+  -H 'content-type: application/json' -d '{"q":"what is an 824?"}'   # streamed stages
+```
+
+The workbench reads a **policy tier** (`policy.py`): env is policy, a request is
+preference, policy wins — a disallowed corpus or a locked knob is a 403 with a
+reason, never a silent downgrade. Metered reranking is off by default and budgeted
+from the audit ledger; a per-host rate limit and a generation semaphore bound the
+box; on a public deploy `/ask*` fail closed behind an API key. Policy env vars are
+documented in [`.env.example`](.env.example).
+
+![The Interchange workbench answer panel: "Answer 1, hybrid, 4 passages" marked Grounded, the stub-engine reply citing rail-edi-notes.md, and an engine / cost / telemetry line with request and audit ids above Copy-run-as-JSON and Copy-link controls.](docs/img/workbench.jpg)
+
+### Nightly reindex (launchd)
+A personal corpus changes under your hands, so it needs a rebuild story
+([ADR-0016](docs/adr/0016-corpus-profiles-as-portable-data.md)). On macOS, install a
+nightly full reindex (03:30, read-only against the corpus, $0 — local embeddings, no
+metered call) for one profile:
+
+```bash
+scripts/launchd/install.sh <yours>                        # install + load the agent for your profile
+launchctl kickstart -k gui/$(id -u)/ai.interchange.reindex-<yours>  # run it now
+scripts/launchd/install.sh <yours> --uninstall            # remove it
+```
+
+`INTERCHANGE_CORS_ORIGINS` (comma-separated; empty/unset keeps today's same-origin-only
+behaviour) lets a separate-origin personal frontend call `/ask` and `/health`.
 
 ## Architecture (MVP)
 
 ```
-docs/*.md ──chunk──> Chroma (local vectors)
+docs/*.md,*.txt,*.pdf ──chunk──> Chroma (local vectors)
                          │  top-k retrieve
 user ──input guardrail──> Claude (context = data, not instructions)
                          │
@@ -90,22 +155,65 @@ user ──input guardrail──> Claude (context = data, not instructions)
 
 | Dimension | Control | Status |
 |---|---|---|
-| Security | input/output guardrails, injection defense, instruction/data separation | ✅ |
-| Governance | per-request audit log w/ cost + grounding; secrets hygiene | ✅ |
-| Evaluation | retrieval hit@k eval (`--eval`); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
-| Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009) | 🟡 |
-| Reliability | graceful refusal over hallucination; retries/fallback routing | 🟡 |
-| Cost | per-request estimate + running total; model routing | 🟡 |
+| Security | input/output guardrails, injection defense, instruction/data separation; web policy tier (corpus allow-list, pins as HMAC capability tokens, CSP/nosniff, fail-closed public auth — ADR-0015) | ✅ |
+| Governance | per-request audit log w/ cost + grounding; secrets hygiene; policy vs preference tiers (403 with reason, never a silent downgrade) + a metered daily budget enforced from the ledger (ADR-0015) | ✅ |
+| Evaluation | retrieval hit@k eval (`--eval`) with **measured ablations** — hybrid vs dense/bm25, the reranker trigger fired and paid off (hit@1 11→15/18, local cross-encoder, ADR-0014); passage-level metric + structural lead handling (ADR-0017, metric kept / ingest merge rejected); context@k / note@k assembly metrics (ADR-0018); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
+| Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009); per-stage timings streamed to the workbench UI (ADR-0015) | 🟡 |
+| Reliability | graceful refusal over hallucination; retries/fallback routing; per-host rate limit + generation semaphore with graceful 429/503 on the web surface (ADR-0015) | 🟡 |
+| Cost | per-request estimate + running total; model routing; metered reranking off by default, budgeted daily from the audit ledger (ADR-0015) | 🟡 |
 | Deployment | IaC, CI/CD, AWS Bedrock in-VPC | ⬜ |
-| Context/Memory | agentic retrieval, retrieval/long-context routing, agentic memory | ⬜ |
+| Context/Memory | context assembly with a budget — the retrieval unit is the chunk, the context unit the note; fair-share expansion, measured brain context@4 2/7→7/7 (ADR-0018); corpus profiles as portable data — private overlay, shared index dir, per-profile persona/retrieval/tools (ADR-0016). Agentic retrieval, retrieve/long-context routing, and agentic memory remain roadmap | 🟡 |
 
 ## Roadmap
-1. **Agentic retrieval:** LangGraph agent + an MCP tool server ("look up X12 segment definition"); hybrid retrieval; the model routes between retrieve / long-context / iterate-until-enough-context (the knowledge-runtime loop).
-2. **Quality gate:** RAGAS eval harness on a golden set; block regressions.
-3. **Observability:** Arize Phoenix tracing.
-4. **Hardening:** classifier-grade guardrails (e.g., Bedrock Guardrails), model routing, caching.
-5. **Cloud:** port generation to AWS Bedrock (data stays in-VPC).
+Shipped since the first cut — now in the scorecard above and `docs/adr/`, not the
+roadmap: the **MCP tool server** (ADR-0003), **hybrid structure-aware retrieval**
+(ADR-0007), the **answer-quality eval harness** (ADR-0008), and **OpenTelemetry
+tracing** to a local Phoenix (ADR-0009). What is still ahead:
+
+1. **Agentic retrieval:** the model routes between retrieve / long-context /
+   iterate-until-enough-context (the knowledge-runtime loop); retrieve-vs-long-context
+   router + multi-hop, trigger-gated (ADR-0014).
+2. **Hardening:** classifier-grade guardrails (e.g., Bedrock Guardrails), model routing,
+   caching.
+3. **Cloud:** port generation to AWS Bedrock (data stays in-VPC).
 
 ## License / data
 MIT. The `docs/` content is generic, public-knowledge EDI/rail reference
 material — no proprietary partner specifications are included.
+
+## Agent-to-agent: A2A
+Interchange also speaks to other *agents*, not just tools. The `a2a_agent/`
+package adds an Agent-to-Agent (A2A) protocol surface: a signed Agent Card
+for discovery and identity, an API-keyed JSON-RPC task path, and a
+`requester` client that verifies the card before sending a task. The same
+guarded core answers either — the input guardrail and output grounding check
+run unchanged on this path, same as every other.
+
+Run the demo with `make a2a-demo PROFILE=hotel` (or `PROFILE=rail`) to see
+the requester fetch and verify the signed card, submit a task, and stream
+its events; `pytest -q tests/test_a2a.py` runs the offline test suite for it.
+`PROFILE=rail|hotel` on `make a2a-demo` (`--profile` on the requester) points
+the same agent code at either this repo's EDI/rail corpus or a small
+self-authored hotel-policy corpus (`hotel-demo/`), to show the agent
+generalizes past rail/EDI without new code — see
+[ADR-0013](docs/adr/0013-a2a-agent-interop.md) and
+[Lesson 07](lessons/07-a2a-handoff.md). For the manual two-terminal run with
+a real model, and for live runs generally, see
+[a2a_agent/README.md](a2a_agent/README.md).
+
+Honest limits: this is a personal build, not a fielded multi-tenant service.
+The watsonx Orchestrate registration (`a2a_agent/orchestrate/`) targets a
+30-day trial tenant, not a production account. The hotel corpus is
+self-authored demo content, not any real hotel's actual policy. Push
+notifications, gRPC transport, and a cross-agent router are out of scope
+this sprint.
+
+| Protocol | Role | Transport | Identity | Where in this repo |
+|---|---|---|---|---|
+| MCP | agent-to-tool | stdio | trusted local process, tool schemas | `mcp_server.py` |
+| A2A | agent-to-agent | HTTP (JSON-RPC, 1.0 + 0.3 compat) | signed Agent Card (JWS ES256, pinned `kid`), API key per caller | `a2a_agent/` |
+
+**OWASP Agentic Top 10 mapping**
+- **ASI01 — goal hijack:** the input guardrail runs unchanged on the A2A path; no lighter-weight check for an agent caller.
+- **ASI03 — identity and privilege abuse:** signed card, pinned `kid`, API key per caller, per-agent tier declaration, caller recorded in the audit log.
+- **ASI07 — insecure inter-agent communication:** JCS+JWS card integrity with tests for tampered/unsigned/unknown-`kid` rejection, TLS transport, no remote (`jku`) key fetch.

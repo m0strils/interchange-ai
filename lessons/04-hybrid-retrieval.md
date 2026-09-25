@@ -157,3 +157,22 @@ fastest way to make *both* of those matter is the least glamorous task: grow the
 corpus toward real EDI/rail reference docs. The harness is now here to tell us,
 honestly, when they start to pay off.
 ```
+
+
+## The retrieval unit is not the context unit (ADR-0018)
+
+Chunks are the right unit to *rank*: short, focused passages are what BM25, the dense
+embedder and the cross-encoder score well. They are the wrong unit to *hand the model*
+when the notes are small and a question spans a whole note. On the brain corpus the
+retriever found the right notes in every mode (source hit@4 22–25 of 25) and the answers
+still named the notes without their content, because four 600-character chunks cannot
+hold a ten-section note. Reshaping chunks at ingest (ADR-0017) lowered the lead-chunk
+share and broke the reranker. What worked was leaving ranking alone and assembling the
+context afterwards: seed every hit's own chunk, then give each hit a fair share of a
+character budget to expand to its whole note (under a cap) or to bounded neighbours, then
+redistribute what is left. Measured: context@4 went from 2 of 7 to 7 of 7 and the graded
+answer-correctness from 40% to 93%, with zero per-row ranking changes. The lesson is the
+separation itself, and the discipline that made it honest: pre-register the numbers, build
+the metric before the fix, and keep the control pinned by a test. The brain numbers
+here are **measured on a private corpus** (a personal Obsidian vault, overlay-only per
+ADR-0016) and are not reproducible from this clone.
