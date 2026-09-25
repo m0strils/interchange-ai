@@ -1,8 +1,8 @@
 """Headless `claude -p` MCP/tool hygiene (feature/passage-eval).
 
 Observed defect 2026-09-23: with no MCP restriction on the headless RAG session,
-every user-scope MCP server in `~/.claude.json` (two Obsidian vaults on this
-machine) loaded into what should be a pure text-generation session. The model
+every user-scope MCP server in `~/.claude.json` (on the reference machine, two
+Obsidian connectors) loaded into what should be a pure text-generation session. The model
 tried the connectors, was denied, and replied "both Obsidian connectors were
 denied" instead of answering. `agent_sub` passed `--mcp-config`/`--allowedTools`
 but no `--strict-mcp-config`, so user-scope servers still loaded and cost context.

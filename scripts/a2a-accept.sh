@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 # Goal A acceptance gate for the A2A demonstration. Copy to interchange-ai/scripts/a2a-accept.sh,
 # commit it, and add it to the repo's protected paths BEFORE starting /goal so the run cannot
-# edit its own gate. Runs AC1..AC12 from learning/a2a-acceptance-criteria.md offline at $0.
+# edit its own gate. Runs AC1..AC12 offline at $0. Criteria (inline): preconditions
+# (interchange answers, suite green, /health present, a2a-sdk 1.1.x installed and
+# unshadowed); demo runs (hotel + rail each verify a signed card and cite a grounded
+# answer as caller a2a:requester on the stub engine, no server left running); tests
+# and scenarios (test_a2a.py green: tampered/unsigned/unknown-kid cards rejected,
+# injection fails the task without calling the engine, missing API key -> 401,
+# profile switch changes corpus, streaming WORKING->COMPLETED, MCP and A2A audit
+# rows share keys, verifier pins ES256 and rejects a jku fetch); regression (full
+# suite green, eval/baseline.json untouched); artifacts (ADR, lesson, profiles,
+# orchestrate card, feature file, 3+ hotel pages, per-agent tier, README OWASP +
+# MCP/A2A table); hygiene (only public keys tracked, no .env/audit.jsonl, clean tree,
+# no removed tests or added skip/xfail).
 # Exits 0 only when every line is PASS. Leaves no process running.
 
 set -uo pipefail

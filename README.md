@@ -76,6 +76,28 @@ measured from the CLI's JSON, ADR-0004; $0 marginal; shares your subscription's
 usage limits). The audit log records which engine served each
 request. Set a default with `INTERCHANGE_ENGINE=claude-code` in `.env`.
 
+### Profiles (corpora as data, ADR-0016)
+Two corpora ship in-repo: **`rail`** (this repo's EDI/rail docs) and **`hotel`** (a
+self-authored demo). Point the runtime at either without touching code:
+
+```bash
+make reindex PROFILE=rail && make eval PROFILE=rail K=4   # committed EDI/rail corpus
+make a2a-demo PROFILE=hotel                               # committed hotel-policy demo
+```
+
+Add a **personal** corpus in a private overlay that is never committed — three lines in
+`~/.interchange/profiles.yaml`:
+
+```yaml
+mynotes:
+  docs_dir: /path/to/my/notes
+  golden: ~/.interchange/golden-mynotes.jsonl   # personal eval set, kept outside the repo
+```
+
+then `python interchange.py --profile mynotes --reindex`. The committed `vault` profile
+is a generic *shape* (env-provided `docs_dir`, generic Obsidian ignores, no `golden`);
+overlay it with your own `docs_dir` and `golden:` the same way.
+
 ### Browser workbench (`/ui`)
 A same-origin browser surface over the *same* governed pipeline: ask a question,
 see the retrieved evidence ranked with its **real scores** (dense `l2` distance,
@@ -108,9 +130,9 @@ nightly full reindex (03:30, read-only against the corpus, $0 — local embeddin
 metered call) for one profile:
 
 ```bash
-scripts/launchd/install.sh brain                          # install + load the agent
-launchctl kickstart -k gui/$(id -u)/ai.interchange.reindex-brain  # run it now
-scripts/launchd/install.sh brain --uninstall              # remove it
+scripts/launchd/install.sh <yours>                        # install + load the agent for your profile
+launchctl kickstart -k gui/$(id -u)/ai.interchange.reindex-<yours>  # run it now
+scripts/launchd/install.sh <yours> --uninstall            # remove it
 ```
 
 `INTERCHANGE_CORS_ORIGINS` (comma-separated; empty/unset keeps today's same-origin-only
@@ -135,19 +157,25 @@ user ──input guardrail──> Claude (context = data, not instructions)
 |---|---|---|
 | Security | input/output guardrails, injection defense, instruction/data separation; web policy tier (corpus allow-list, pins as HMAC capability tokens, CSP/nosniff, fail-closed public auth — ADR-0015) | ✅ |
 | Governance | per-request audit log w/ cost + grounding; secrets hygiene; policy vs preference tiers (403 with reason, never a silent downgrade) + a metered daily budget enforced from the ledger (ADR-0015) | ✅ |
-| Evaluation | retrieval hit@k eval (`--eval`); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
+| Evaluation | retrieval hit@k eval (`--eval`) with **measured ablations** — hybrid vs dense/bm25, the reranker trigger fired and paid off (hit@1 11→15/18, local cross-encoder, ADR-0014); passage-level metric + structural lead handling (ADR-0017, metric kept / ingest merge rejected); context@k / note@k assembly metrics (ADR-0018); answer-quality grade — refusal- & answer-correctness + faithfulness monitor (`--grade`, advisory) | 🟡 |
 | Observability | always-on latency/cost in the audit log; opt-in OpenTelemetry tracing of the RAG + agent paths to a local Phoenix (`INTERCHANGE_TRACING=1`, ADR-0009); per-stage timings streamed to the workbench UI (ADR-0015) | 🟡 |
 | Reliability | graceful refusal over hallucination; retries/fallback routing; per-host rate limit + generation semaphore with graceful 429/503 on the web surface (ADR-0015) | 🟡 |
 | Cost | per-request estimate + running total; model routing; metered reranking off by default, budgeted daily from the audit ledger (ADR-0015) | 🟡 |
 | Deployment | IaC, CI/CD, AWS Bedrock in-VPC | ⬜ |
-| Context/Memory | agentic retrieval, retrieval/long-context routing, agentic memory | ⬜ |
+| Context/Memory | context assembly with a budget — the retrieval unit is the chunk, the context unit the note; fair-share expansion, measured brain context@4 2/7→7/7 (ADR-0018); corpus profiles as portable data — private overlay, shared index dir, per-profile persona/retrieval/tools (ADR-0016). Agentic retrieval, retrieve/long-context routing, and agentic memory remain roadmap | 🟡 |
 
 ## Roadmap
-1. **Agentic retrieval:** LangGraph agent + an MCP tool server ("look up X12 segment definition"); hybrid retrieval; the model routes between retrieve / long-context / iterate-until-enough-context (the knowledge-runtime loop).
-2. **Quality gate:** RAGAS eval harness on a golden set; block regressions.
-3. **Observability:** Arize Phoenix tracing.
-4. **Hardening:** classifier-grade guardrails (e.g., Bedrock Guardrails), model routing, caching.
-5. **Cloud:** port generation to AWS Bedrock (data stays in-VPC).
+Shipped since the first cut — now in the scorecard above and `docs/adr/`, not the
+roadmap: the **MCP tool server** (ADR-0003), **hybrid structure-aware retrieval**
+(ADR-0007), the **answer-quality eval harness** (ADR-0008), and **OpenTelemetry
+tracing** to a local Phoenix (ADR-0009). What is still ahead:
+
+1. **Agentic retrieval:** the model routes between retrieve / long-context /
+   iterate-until-enough-context (the knowledge-runtime loop); retrieve-vs-long-context
+   router + multi-hop, trigger-gated (ADR-0014).
+2. **Hardening:** classifier-grade guardrails (e.g., Bedrock Guardrails), model routing,
+   caching.
+3. **Cloud:** port generation to AWS Bedrock (data stays in-VPC).
 
 ## License / data
 MIT. The `docs/` content is generic, public-knowledge EDI/rail reference

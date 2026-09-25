@@ -39,7 +39,7 @@ python interchange.py --eval --k 1                 # tighten the cutoff to hit@1
 python interchange.py --eval --mode dense          # ablation: dense-only (bypasses fusion)
 python interchange.py --eval --mode bm25           # ablation: BM25-only
 python interchange.py --eval --mode all            # run every mode, print a comparison table
-python interchange.py --eval --golden eval/golden-vault.jsonl --corpus vault  # a named corpus
+python interchange.py --eval --golden ~/.interchange/golden-vault.jsonl --corpus vault  # a personal set, kept outside the repo
 python interchange.py --eval --depth 20 --pool 40  # widen the rank/near-miss window and the pool
 python interchange.py --eval --mode hybrid+rerank --rerank-n 30  # rerank the top-30 fused candidates
 ```
@@ -200,11 +200,15 @@ $0 by exercising only the pure functions (`chunk`, `tokenize`, `bm25_rank`,
 `rank_histogram`, `unknown_expected`) and the runner with `retrieve()`/`_known_sources()`
 stubbed.
 
-## Vault set — `golden-vault.jsonl`
+## Vault set — `golden-vault.jsonl` (personal, kept outside the repo)
 
 A second golden set scores retrieval over the nested Obsidian **vault** corpus
-(ADR-0014), read with `--golden eval/golden-vault.jsonl --corpus vault`. The **format
-is identical** to `golden.jsonl`, with two differences a nested corpus brings:
+(ADR-0014). Because it references personal note paths, it lives **outside the
+repository** — at `~/.interchange/golden-vault.jsonl`, referenced from the private
+overlay's `golden:` key (ADR-0016), the same way the personal graded sets do — and is
+read with `--golden ~/.interchange/golden-vault.jsonl --corpus vault` (or simply
+`--profile vault` once the overlay points `golden:` at it). The **format is identical**
+to `golden.jsonl`, with two differences a nested corpus brings:
 
 - `expected_source` is the **relative POSIX path recorded in the index** (e.g.
   `Projects/Interchange.md`), not just a basename — the vault has duplicate basenames,

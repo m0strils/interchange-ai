@@ -12,8 +12,8 @@ It breaks the moment the corpus is personal.
 
 The question that forced this ADR was literal: *should we clone interchange-ai into
 another folder for a second brain?* The owner is standing up two new corpora that will
-never enter the repo — a fresh Obsidian vault at `~/Documents/Brain`, and a research
-corpus over the saved `last30days` evidence dumps at `~/Documents/Last30Days`. Neither
+never enter the repo — a fresh Obsidian vault at `<vault>`, and a research
+corpus over the saved `last30days` evidence dumps at `<research dumps>`. Neither
 can be a committed profile block, and the repo is headed public, so "just add it to
 `profiles.yaml`" would either commit a path to a private directory or fail to resolve.
 
@@ -91,7 +91,7 @@ Make a corpus a **portable profile**: a named block that can live outside the tr
 carries its own persona, retrieval default and tool allow-list, and that a single
 process can apply per request. Built in slices, each independently useful.
 
-- **`INTERCHANGE_PROFILES` → an overlay YAML** (default `~/.interchange/profiles.yaml`;
+- **`INTERCHANGE_PROFILES` → an overlay YAML** (default `<workspace>/profiles.yaml`;
   an **empty string disables** the overlay; a **missing file is simply no overlay**, not
   an error). Overlay blocks **shallow-merge over the committed ones by profile name** —
   keys replace, lists replace — and an overlay may add **whole new profiles**
@@ -101,7 +101,7 @@ process can apply per request. Built in slices, each independently useful.
 - **`INTERCHANGE_CHROMA_DIR` → the index location** (default unchanged: `<repo>/.chroma`).
   One store per machine, N collections — so `edi`, `vault`, `brain` and `research` share
   a single store instead of one per checkout, and a personal index can sit under
-  `~/.interchange/` next to the overlay.
+  `<workspace>/` next to the overlay.
 - **`interchange.py --profile NAME`** applies a profile **in-process before any
   index/answer/eval call**, resolving collection, docs dir, persona, retrieval default
   and tools together. This **retires the export-before-`.env` edge** (ADR-0014): the
@@ -136,7 +136,7 @@ depends on the HTTP/MCP contract**, never a copy of this one.
 ## Consequences
 **What becomes true now**
 - Personal corpora **never appear in the tree**. The `brain`/`research` vault, index,
-  profile block and golden set all live under `~/.interchange/` and `~/Documents/Brain`;
+  profile block and golden set all live under `<workspace>/` and `<vault>`;
   the public repo carries only `rail`, `hotel` and the `vault` shape. The clone question
   is answered *no* — one engine, corpora as portable data.
 - A corpus is answered by **its own persona with its own tools**, resolved per request,
@@ -191,7 +191,7 @@ recorded its ablations:
 
 ## Update 2026-09-23 — rebuild time measured, incremental reindex stays deferred
 Slice 2 landed `INTERCHANGE_CHROMA_DIR`, `--profile` and the timed `--reindex`. All five
-profiles were rebuilt into one workspace store (`~/.interchange/chroma`, 59 MB after the
+profiles were rebuilt into one workspace store (`<workspace>/chroma`, 59 MB after the
 run) on the local default embedder, one process each, back to back (**measured**, wall
 clock from the `Indexed …` summary line; Apple silicon laptop):
 
@@ -199,9 +199,9 @@ clock from the `Indexed …` summary line; Apple silicon laptop):
 |---|---:|---:|---:|
 | rail | 3 | 12 | 0.3 s |
 | hotel | 3 | 21 | 0.3 s |
-| brain (`~/Documents/Brain`, overlay) | 25 | 407 | 3.0 s |
-| research (`~/Documents/Last30Days`, overlay) | 13 | 808 | 5.5 s |
-| vault (`~/Documents/Notes`, ADR-0014 corpus) | 188 | 4,614 | 30.2 s |
+| brain (`<vault>`, overlay) | 25 | 407 | 3.0 s |
+| research (`<research dumps>`, overlay) | 13 | 808 | 5.5 s |
+| vault (`<notes vault>`, ADR-0014 corpus) | 188 | 4,614 | 30.2 s |
 
 The largest corpus rebuilds in **30 s** against the **5-minute** trigger, so the nightly
 full rebuild is the freshness story and **incremental upsert by content hash stays

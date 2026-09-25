@@ -52,17 +52,19 @@ hotel:
     checkout, and pet policies, grounded in the self-authored hotel-demo/
     corpus.
 
+# The committed vault block is a public *shape*, not a real corpus: docs_dir
+# comes from the environment and the ignore list is the generic Obsidian
+# housekeeping set. Point it at your own notes — and set a `golden:` eval set —
+# from the private overlay (~/.interchange/profiles.yaml, ADR-0016); a personal
+# golden set lives outside the repo (see eval/README.md).
 vault:
   collection: vault
   docs_dir: ${INTERCHANGE_VAULT_DIR}
   ignore:
-    - "<secret-note>.md"
-    - "00-INBOX/"
-    - "05-DAILY/"
-    - "03-RESOURCES/last30days-research/"
-    - "03-RESOURCES/Templates/"
-    - "scripts/"
-  golden: eval/golden-vault.jsonl
+    - ".obsidian/"
+    - ".trash/"
+    - "Templates/"
+    - "_attachments/"
   retrieval:
     mode: hybrid+rerank
   tools: [search_docs]
@@ -70,13 +72,13 @@ vault:
     You are an assistant over a personal Obsidian vault indexed read-only.
     Answer only from the provided notes, cite the note path in [brackets], and
     say plainly when the notes do not cover the question.
-  sample_question: "How many tags should a single document normally carry?"
+  sample_question: "Where do unprocessed notes live before they are filed?"
   examples:
-    - "How many tags should a single document normally carry?"
-    - "What does the PARA layout organise notes into?"
-    - "Where do fleeting notes live before they are processed?"
+    - "Where do unprocessed notes live before they are filed?"
+    - "How is the vault organised into folders?"
+    - "How many tags should a single note normally carry?"
   knowledge_agent_name: interchange-knowledge (vault)
   requester_name: interchange-requester (vault)
   description: >
-    Answers questions over a personal Obsidian vault (PARA layout) indexed
-    read-only into a local collection; the vault itself is never written.
+    Answers questions over a personal Obsidian vault indexed read-only into a
+    local collection; the vault itself is never written.

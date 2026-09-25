@@ -230,7 +230,7 @@ before any assembler code, and `passage@4` and lead share are re-baselined on it
 the control.
 
 ## Control baseline (frozen set)
-Golden file `~/.interchange/golden-brain.jsonl`, 25 rows, 7 section rows, frozen at
+Golden file `<workspace>/golden-brain.jsonl`, 25 rows, 7 section rows, frozen at
 sha256 `b92dca860896af04ab332610d972764f9f3aa0af3a7f68e23fe69c3eb93b93d0`. The corpus
 is frozen with it: 31 files / 513 chunks after the `30-Career/People/` and
 `30-Career/Interviews/` ignore (rebuild 3.6 s). Plan notes in the vault quote the eval
@@ -407,7 +407,7 @@ is `hybrid`, so it has no effect there; vault over HTTP runs `hybrid` not `hybri
 | mean assembled chars | < 14,000 | **12,961** (max 19,761) | pass |
 | headless input tokens, mean of 3 live | < 15,000 | **14,615** (16,614 / 15,744 / 11,486; baseline 9,851) | pass on the mean; two single runs over |
 | live answers grounded | 3/3 | 3/3, `grounded` true in the audit rows | pass |
-| graded answers (3-row pre-registered rubric, `~/.interchange/graded-brain.jsonl`) | pass | **answer-correctness 93%** (0.80 / 1.00 / 1.00), **faithfulness 97%** | pass |
+| graded answers (3-row pre-registered rubric, `<workspace>/graded-brain.jsonl`) | pass | **answer-correctness 93%** (0.80 / 1.00 / 1.00), **faithfulness 97%** | pass |
 
 Live detail: the five-practices question now lists five practices with an evidence trail
 (4 notes, 33 chunks, 19.4k chars, 14.6 s, shadow cost $0.068 at $0 marginal); the

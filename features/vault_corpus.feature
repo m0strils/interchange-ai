@@ -31,10 +31,13 @@ Feature: Vault corpus ingestion — nested Markdown folders as a read-only corpu
     Then the discovered sources are "Personal/Index.md, Projects/Index.md"
     And every discovered source is unique
 
-  Scenario: The seed corpus discovers exactly the same three files as before
+  # a2a-RESULT.md joined adr/ and workbench-RESULT.md in docs/.interchangeignore
+  # (acceptance-gate run records are project meta, not EDI/rail domain knowledge),
+  # so the edi corpus is now exactly the two seed reference docs.
+  Scenario: The seed corpus discovers exactly the two EDI/rail seed docs
     Given the real seed docs directory
     When I discover the vault's indexable files
-    Then the discovered sources are "a2a-RESULT.md, rail-edi-notes.md, x12-overview.md"
+    Then the discovered sources are "rail-edi-notes.md, x12-overview.md"
 
   Scenario: A note containing a credential pattern is flagged by the guard
     Given a note whose body is "GEMINI_API_KEY=AIzaSyD1a2b3c4d5e6f7g8h9i0jklmn"

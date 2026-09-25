@@ -1,6 +1,6 @@
 # Workbench acceptance gate — result
 
-*Gate: `make workbench-accept` (`scripts/workbench-accept.sh` + `scripts/workbench_accept.py`). Branch `feature/browser-workbench`, commit `6081d8e`, run started 2026-09-22T12:17:08-0400, clean tree, exit 0. Engine: `claude-code` (headless `claude -p` on the Claude subscription). `claude -p` invocations: 5 (P2 login proof, AC3, AC4, AC6a, AC9); the run-log `calls` field counts the 3 generate frames the driver observed (AC9 closes its stream before generate, P2 is outside the driver). Shadow cost delta $0.378 (measured from the CLI JSON, ADR-0004), billed delta $0.0000. Model that ran: `claude-opus-4-7`. Honest notes: AC9 proves the orphaned worker holds and then releases its slot; it does not exercise the `cancel` path (the subprocess always spawns; `cancel` is covered by `tests/test_workbench.py::test_cancel_honoured_between_stages` only). AC4 keepalives were 0 because generate took 12.6 s, under the 15 s silence interval, so the `==0` band applied. The gate is not yet in `.claude/hooks/protect-paths.sh` `PROTECTED`; add both script paths there by hand (AC13e NOTE).*
+*Gate: `make workbench-accept` (`scripts/workbench-accept.sh` + `scripts/workbench_accept.py`). Branch `feature/browser-workbench`, commit `6081d8e`, run started 2026-09-22T12:17:08-0400, clean tree, exit 0. Engine: `claude-code` (headless `claude -p` on the Claude subscription). `claude -p` invocations: 5 (P2 login proof, AC3, AC4, AC6a, AC9); the run-log `calls` field counts the 3 generate frames the driver observed (AC9 closes its stream before generate, P2 is outside the driver). Shadow cost delta $0.378 (measured from the CLI JSON, ADR-0004), billed delta $0.0000. Model that ran: `claude-opus-4-7`. Honest notes: AC9 proves the orphaned worker holds and then releases its slot; it does not exercise the `cancel` path (the subprocess always spawns; `cancel` is covered by `tests/test_workbench.py::test_cancel_honoured_between_stages` only). AC4 keepalives were 0 because generate took 12.6 s, under the 15 s silence interval, so the `==0` band applied. Both gate scripts are now in `.claude/hooks/protect-paths.sh` `PROTECTED`.*
 
 ```
 == Preconditions
@@ -31,7 +31,6 @@ PASS  AC13a server pid 75221 stopped
 PASS  AC13b port 8790 free
 PASS  AC13c no orphaned children of 75221
 PASS  AC13d tree clean (docs/workbench-RESULT.md excepted)
-NOTE  AC13e gate files differ from dev merge-base (expected on this feature branch); the gate is NOT yet protected — add scripts/workbench-accept.sh + scripts/workbench_accept.py to PROTECTED in .claude/hooks/protect-paths.sh
 PASS  AC13f run-log line appended to eval/workbench-accept-runs.jsonl
 
 WORKBENCH ACCEPTANCE: ALL PASS

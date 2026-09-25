@@ -20,12 +20,10 @@ wrong for anything with folders.
 The corpus that would change this is already on disk: a personal **Obsidian
 vault**, roughly **207 Markdown notes, ~2.2 MB, ~1,100 wikilinks**, in PARA
 folders. It brings every problem the flat glob has never faced: **duplicate
-basenames** (`Index.md` three times, `ROADMAP.md` and `Welcome.md` twice each),
-which Chroma rejects outright since ids are `f"{name}:{j}"`; **nested
-`.obsidian/` directories**; a **secret-bearing root note** holding live keys; a
-`Templates/` folder of Templater `<% %>` placeholders; and large raw research
-dumps that are noise. It also brings what the seed corpus cannot: a real link
-graph.
+basenames**, which Chroma rejects outright since ids are `f"{name}:{j}"`;
+**nested `.obsidian/` directories**; a **secret-bearing note**; a `Templates/`
+folder of Templater `<% %>` placeholders; and large raw research dumps that are
+noise. It also brings what the seed corpus cannot: a real link graph.
 
 An internal research pass on 2026-09-22 surveyed whether link- or graph-aware
 retrieval beats hybrid. The verdict is unhelpful to anyone hoping to build a
@@ -235,8 +233,8 @@ positives on placeholders and code (`your-api-key`, `process.env.X`, `KEY_xxxxxx
 `z.string()`). Tightened to require a literal 20+ char value with 3+ digits, a
 placeholder denylist, and known key shapes, it now skips **0**; a digit-free
 passphrase is an accepted false negative (the guard is a second layer, never the
-first). `<secret-note>.md` is excluded by the profile ignore list and never
-reaches the guard at all.
+first). The one note that did hold secrets was excluded by the (then personal)
+profile ignore list and never reached the guard at all.
 
 ### Verdicts on the triggers
 
@@ -313,3 +311,12 @@ vetted by the owner** before any number was trusted. And, as noted, the reranker
 window was tuned to where the misses landed. The point of this slice was the
 measurement; the reranker paying off and link expansion not are both **results**,
 recorded here either way.
+
+## Update — 2026-09-24 (go-public: golden set out of the tree)
+The vault golden set (`eval/golden-vault.jsonl`) has been moved out of the repository
+ahead of going public — a personal golden set references personal note paths, so it
+lives outside the tree (referenced from the private overlay's `golden:` key, ADR-0016)
+alongside the other personal sets under the workspace. The committed `vault` profile is
+now a generic public *shape* (env-provided `docs_dir`, generic Obsidian ignores, no
+`golden`). Every number recorded above stands **as measured on that private corpus**;
+it is not reproducible from this clone, which ships no vault and no vault golden set.
