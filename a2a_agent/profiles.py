@@ -147,16 +147,21 @@ def profile_persona(profile: dict) -> str | None:
 
 def profile_retrieval(profile: dict) -> dict:
     """The profile's retrieval policy:
-    ``{"mode", "rerank", "context", "budget_chars", "note_max_chars"}``.
+    ``{"mode", "rerank", "context", "budget_chars", "note_max_chars", "chunks_only"}``.
 
     ``mode`` / ``rerank`` are unchanged (default ``hybrid`` / ``None``). The context
     keys (ADR-0018) default to ``chunks`` and the ``interchange`` constants when the
-    ``retrieval`` block omits them. Validation (a lazy ``interchange`` import, to
-    avoid an import cycle): ``mode`` in ``MODES``; ``context`` in ``CONTEXT_MODES``;
-    ``budget_chars`` / ``note_max_chars`` positive ``int`` (a string like ``"12000"``
-    is rejected — clamping is policy's job, not the profile's); and
-    ``note_max_chars <= budget_chars``. Every failure raises a ``ValueError`` naming
-    the profile and the offending key.
+    ``retrieval`` block omits them. ``chunks_only`` (ADR-0018 Update 2026-09-24) is a
+    list of POSIX-path prefixes, relative to the corpus root (e.g.
+    ``"30-Career/People/"``), whose notes are indexed but never assembled whole: in
+    ``notes`` mode a hit under one of them is seeded and never expanded. It defaults to
+    ``[]``, must be a list of non-empty strings, and each entry is normalised to
+    forward slashes. Validation (a lazy ``interchange`` import, to avoid an import
+    cycle): ``mode`` in ``MODES``; ``context`` in ``CONTEXT_MODES``; ``budget_chars`` /
+    ``note_max_chars`` positive ``int`` (a string like ``"12000"`` is rejected —
+    clamping is policy's job, not the profile's); and ``note_max_chars <=
+    budget_chars``. Every failure raises a ``ValueError`` naming the profile and the
+    offending key.
     """
     block = profile.get("retrieval") or {}
     mode = block.get("mode", "hybrid")
@@ -193,8 +198,23 @@ def profile_retrieval(profile: dict) -> dict:
             f"profile {name!r}: note_max_chars ({note_max_chars}) must be "
             f"<= budget_chars ({budget_chars})"
         )
+    raw_chunks_only = block.get("chunks_only", [])
+    if not isinstance(raw_chunks_only, list):
+        raise ValueError(
+            f"profile {name!r}: chunks_only must be a list of path prefixes, "
+            f"got {raw_chunks_only!r}"
+        )
+    chunks_only: list[str] = []
+    for prefix in raw_chunks_only:
+        if not isinstance(prefix, str) or not prefix.strip():
+            raise ValueError(
+                f"profile {name!r}: chunks_only entries must be non-empty strings, "
+                f"got {prefix!r}"
+            )
+        chunks_only.append(prefix.strip().replace("\\", "/"))
     return {"mode": str(mode), "rerank": rerank, "context": str(context),
-            "budget_chars": budget_chars, "note_max_chars": note_max_chars}
+            "budget_chars": budget_chars, "note_max_chars": note_max_chars,
+            "chunks_only": chunks_only}
 
 
 def profile_tools(profile: dict) -> list[str]:

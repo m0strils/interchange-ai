@@ -114,6 +114,36 @@ def test_policy_clamps_context():
     pass
 
 
+@scenario("context_assembly.feature",
+          "A chunks-only prefix is seeded but never expanded")
+def test_chunks_only_seeded_not_expanded():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "Chunks-only does not count as a fallback")
+def test_chunks_only_not_a_fallback():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "The prefix match is on the POSIX path from the corpus root")
+def test_chunks_only_prefix_is_path_rooted():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "Validation rejects a non-list or empty string prefix")
+def test_chunks_only_validation():
+    pass
+
+
+@scenario("context_assembly.feature",
+          "resolve_context carries chunks_only from the profile and clamp leaves it intact")
+def test_resolve_context_carries_chunks_only():
+    pass
+
+
 # --- builders --------------------------------------------------------------
 def _padded(marker: str, length: int) -> str:
     """A chunk text of exactly ``length`` chars, starting with a unique marker so a
@@ -168,6 +198,28 @@ def profile_string_budget(context, value):
                           "retrieval": {"context": "notes", "budget_chars": value}}
 
 
+@given(parsers.parse('the chunks-only prefix "{prefix}"'))
+def chunks_only_prefix(context, prefix):
+    context.setdefault("chunks_only_prefixes", []).append(prefix)
+
+
+@given(parsers.parse('a profile whose retrieval chunks_only is "{kind}"'))
+def profile_bad_chunks_only(context, kind):
+    # "not-a-list": a bare string where a list is required; "empty-item": a list that
+    # contains an empty string — both must be rejected by profile_retrieval.
+    value = "30-Career/People/" if kind == "not-a-list" else ["30-Career/People/", ""]
+    context["profile"] = {"name": "probe",
+                          "retrieval": {"context": "notes", "chunks_only": value}}
+
+
+@given(parsers.parse('a fake profile whose retrieval names chunks-only prefix "{prefix}"'))
+def fake_profile_with_chunks_only(context, monkeypatch, prefix):
+    profile = {"name": "fake", "collection": "edi",
+               "retrieval": {"context": "notes", "budget_chars": 20000,
+                             "note_max_chars": 16000, "chunks_only": [prefix]}}
+    monkeypatch.setattr(interchange, "profile_for_collection", lambda c: profile)
+
+
 @given(parsers.parse('the context mode max is "{mode}" and the budget max is {budget:d}'))
 def policy_maxes(monkeypatch, mode, budget):
     monkeypatch.setenv("INTERCHANGE_CONTEXT_MODE_MAX", mode)
@@ -183,9 +235,10 @@ def context_settings(context, mode, budget, note_max):
 # --- When ------------------------------------------------------------------
 def _run_assemble(context, mode, **kw):
     snap = fake_snapshot(_notes(context))
+    prefixes = context.get("chunks_only_prefixes", ())
     try:
         context["result"] = interchange.assemble_context(
-            _hits(context), snap, mode=mode, **kw)
+            _hits(context), snap, mode=mode, chunks_only=prefixes, **kw)
     except ValueError as exc:
         context["error"] = exc
 
@@ -216,6 +269,11 @@ def clamp_settings(context):
     import policy
 
     context["clamped"] = policy.clamp_context(context["settings"])
+
+
+@when(parsers.parse('I resolve the context for corpus "{corpus}"'))
+def resolve_context_for(context, corpus):
+    context["resolved"] = interchange.resolve_context(corpus=corpus)
 
 
 # --- Then ------------------------------------------------------------------
@@ -316,6 +374,16 @@ def each_chunk_once(context, source):
 @then(parsers.parse("secret_drops is {n:d}"))
 def secret_drops_is(context, n):
     assert context["result"].secret_drops == n
+
+
+@then(parsers.parse("the chunks_only count is {n:d}"))
+def chunks_only_count_is(context, n):
+    assert context["result"].chunks_only == n
+
+
+@then(parsers.parse('the resolved chunks_only is "{prefix}"'))
+def resolved_chunks_only_is(context, prefix):
+    assert context["resolved"]["chunks_only"] == [prefix]
 
 
 @then(parsers.parse('the seed chunk of "{source}" is kept'))

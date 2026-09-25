@@ -1173,17 +1173,24 @@ class Assembled:
       emitted chunks.
     - ``dropped_hits``: hits whose own chunk was not in the snapshot (0 by
       construction — the seed pass always fits — but counted anyway).
-    - ``fallbacks``: sources that were not included whole (ADR-0018 slice B′).
+    - ``fallbacks``: sources that were not included whole (ADR-0018 slice B′); a
+      ``chunks_only`` source is NOT a fallback (it never tried to grow — it is seeded
+      by design, not a note that tried and failed).
+    - ``chunks_only``: sources seeded but never expanded because their ``source`` fell
+      under a ``chunks_only`` prefix (ADR-0018 Update 2026-09-24). Retrievable as
+      chunks, never assembled whole; counts in ``chunks_in`` / ``chunks_out`` but not in
+      ``fallbacks``. Always 0 in ``chunks`` mode.
     - ``budget_hit``: a budget constraint stopped an inclusion.
     - ``secret_drops``: expansion-added chunks dropped by ``looks_like_secret``.
     - ``reasons``: per source, one of ``whole`` / ``neighbours`` / ``note_too_big`` /
-      ``share_exceeded`` / ``budget_exhausted`` / ``seed-only`` (empty in ``chunks``
-      mode). ``whole`` = every chunk of the note; ``note_too_big`` = over the cap (never
-      whole); ``share_exceeded`` = under the cap but limited by its fair share;
-      ``budget_exhausted`` = under the cap, the budget stopped it; ``neighbours`` =
-      grown to the +/-2 bound; ``seed-only`` = nothing beyond the seed and not blocked
+      ``share_exceeded`` / ``budget_exhausted`` / ``seed-only`` / ``chunks_only`` (empty
+      in ``chunks`` mode). ``whole`` = every chunk of the note; ``note_too_big`` = over
+      the cap (never whole); ``share_exceeded`` = under the cap but limited by its fair
+      share; ``budget_exhausted`` = under the cap, the budget stopped it; ``neighbours``
+      = grown to the +/-2 bound; ``seed-only`` = nothing beyond the seed and not blocked
       by budget or cap (e.g. a note whose only neighbours were secret-dropped; a
-      one-chunk note is ``whole``).
+      one-chunk note is ``whole``); ``chunks_only`` = a source under a ``chunks_only``
+      prefix, seeded and deliberately never expanded.
     """
     text: str
     included: list
@@ -1197,6 +1204,7 @@ class Assembled:
     budget_hit: bool
     secret_drops: int
     reasons: dict
+    chunks_only: int = 0
 
 
 def _positive_int(name: str, value) -> None:
@@ -1210,7 +1218,8 @@ def _positive_int(name: str, value) -> None:
 
 def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
                      budget_chars: int = CONTEXT_BUDGET_CHARS,
-                     note_max_chars: int = NOTE_MAX_CHARS) -> Assembled:
+                     note_max_chars: int = NOTE_MAX_CHARS,
+                     chunks_only: tuple = ()) -> Assembled:
     """Assemble the context the engine sees from ranked ``hits`` (ADR-0018), pure.
 
     ``hits`` are the Hit dicts (``source``, ``chunk`` = chunk index, ``text``…).
@@ -1226,6 +1235,16 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
     emitted string, headers included; a note is never truncated mid-chunk (a ``whole`` is
     all chunks or it is not whole), and expansion-added chunks still pass the credential
     guard.
+
+    ``chunks_only`` (ADR-0018 Update 2026-09-24) is an iterable of POSIX-path prefixes
+    (relative to the corpus root, e.g. ``"30-Career/People/"``). In ``notes`` mode a hit
+    whose ``source`` starts with any of them is **seeded only** — passes 2 and 3 never
+    expand it (no whole note, no neighbours) — and its reason is ``chunks_only``. It
+    still counts in ``chunks_in`` / ``chunks_out``; it is never a ``fallback`` (it is not
+    a note that tried and failed). The match is on the source path from the corpus root,
+    so ``30-Career/PeopleX/…`` does not match ``30-Career/People/``. Ignored in
+    ``chunks`` mode. This keeps third-party names and interview notes retrievable as
+    chunks while never sending them whole.
     """
     if mode not in CONTEXT_MODES:
         raise ValueError(
@@ -1258,6 +1277,13 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
         )
 
     # -- notes mode ---------------------------------------------------------
+    prefixes = tuple(chunks_only or ())
+
+    def _is_chunks_only(src: str) -> bool:
+        """A source is chunks-only when its POSIX path from the corpus root starts with
+        any configured prefix — seeded but never expanded (ADR-0018 Update)."""
+        return any(src.startswith(p) for p in prefixes)
+
     cmap = chunk_map(snapshot)
     # snapshot text for any (source, chunk_index)
     text_by_ref: dict[tuple, str] = {}
@@ -1400,6 +1426,8 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
     seeded_chars = len(emit(included))
     share = (budget_chars - seeded_chars) // n_hits if n_hits else 0
     for src in source_order:
+        if _is_chunks_only(src):
+            continue                    # seeded only — never expanded (ADR-0018 Update)
         if included[src] == full_of[src]:
             continue                    # nothing to add (e.g. a one-chunk note)
         if (not over_cap_of[src] and not _blocking_secret(src)
@@ -1417,6 +1445,8 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
     # the next source is weighed. The +/-2 ceiling is a hard bound; the budget — not that
     # bound and not the cap — is what an under-cap note records as ``budget_exhausted``.
     for src in [s for s in source_order if included[s] != full_of[s]]:
+        if _is_chunks_only(src):
+            continue                    # seeded only — never expanded (ADR-0018 Update)
         if not over_cap_of[src] and not _blocking_secret(src):
             if _fits_budget(src, full_of[src]):
                 included[src] = set(full_of[src])
@@ -1429,7 +1459,9 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
     # chunks present is whole; else the budget, then the +/-2 widen, then the fair
     # share, then nothing-beyond-seed, each explains why the note is not whole.
     for src in source_order:
-        if over_cap_of[src]:
+        if _is_chunks_only(src):
+            reasons[src] = "chunks_only"     # seeded by design, never expanded
+        elif over_cap_of[src]:
             reasons[src] = "note_too_big"
         elif included[src] == full_of[src]:
             reasons[src] = "whole"
@@ -1441,7 +1473,12 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
             reasons[src] = "share_exceeded"
         else:
             reasons[src] = "seed-only"
-    fallbacks = sum(1 for s in source_order if reasons.get(s) != "whole")
+    # a chunks_only source never tried to grow, so it is not a fallback (a note that
+    # tried and failed); it is accounted separately.
+    fallbacks = sum(1 for s in source_order
+                    if reasons.get(s) not in ("whole", "chunks_only"))
+    chunks_only_count = sum(1 for s in source_order
+                            if reasons.get(s) == "chunks_only")
 
     text = emit(included)
     included_list = [(s, ci) for s in source_order for ci in sorted(included.get(s, ()))]
@@ -1451,7 +1488,7 @@ def assemble_context(hits: list, snapshot: Snapshot, *, mode: str = "chunks",
         included_sources=included_sources, chars=len(text),
         chunks_in=len(hits), chunks_out=len(included_list),
         dropped_hits=dropped_hits, fallbacks=fallbacks, budget_hit=budget_hit,
-        secret_drops=secret_drops, reasons=reasons,
+        secret_drops=secret_drops, reasons=reasons, chunks_only=chunks_only_count,
     )
 
 
@@ -2214,8 +2251,10 @@ def resolve_context(*, corpus: str, mode: str | None = None,
                     note_max_chars: int | None = None,
                     pinned: bool = False) -> dict:
     """Resolve the context-assembly settings for ``corpus`` (ADR-0018), returning
-    ``{"mode", "budget_chars", "note_max_chars"}`` ready to splat into
-    ``assemble_context(**settings)``.
+    ``{"mode", "budget_chars", "note_max_chars", "chunks_only"}`` ready to splat into
+    ``assemble_context(**settings)``. ``chunks_only`` is the profile's list of
+    seed-only path prefixes (ADR-0018 Update), carried through the policy clamp
+    untouched (it is not a budget/mode knob) and empty when the profile names none.
 
     Precedence, stated once: an explicit argument wins, else the collection's profile
     (``profile_retrieval(profile_for_collection(corpus))``), else the code defaults
@@ -2226,12 +2265,14 @@ def resolve_context(*, corpus: str, mode: str | None = None,
     exception in the profile lookup or validation (fail closed, toward less context;
     logged at debug, never raised)."""
     ctx, budget, note_max = "chunks", CONTEXT_BUDGET_CHARS, NOTE_MAX_CHARS
+    chunks_only: list[str] = []
     try:
         prof = profile_for_collection(corpus)
         if prof is not None:
             from a2a_agent.profiles import profile_retrieval
             pr = profile_retrieval(prof)
             ctx, budget, note_max = pr["context"], pr["budget_chars"], pr["note_max_chars"]
+            chunks_only = pr["chunks_only"]
         if mode is not None:
             ctx = mode
         if budget_chars is not None:
@@ -2240,16 +2281,21 @@ def resolve_context(*, corpus: str, mode: str | None = None,
             note_max = note_max_chars
         import policy
         clamped = policy.clamp_context(
-            {"context": ctx, "budget_chars": budget, "note_max_chars": note_max})
+            {"context": ctx, "budget_chars": budget, "note_max_chars": note_max,
+             "chunks_only": chunks_only})
         ctx = clamped.get("context", ctx)
         budget = clamped.get("budget_chars", budget)
         note_max = clamped.get("note_max_chars", note_max)
+        # clamp_context is policy over budget/mode only; it leaves chunks_only
+        # untouched (an unmanaged key it copies through — ADR-0018 Update).
+        chunks_only = clamped.get("chunks_only", chunks_only)
     except Exception as exc:  # fail closed toward less context, never raise
         logger.debug("context resolution failed for corpus %r: %s", corpus, exc)
-        ctx, budget, note_max = "chunks", CONTEXT_BUDGET_CHARS, NOTE_MAX_CHARS
+        ctx, budget, note_max, chunks_only = "chunks", CONTEXT_BUDGET_CHARS, NOTE_MAX_CHARS, []
     if pinned:
         ctx = "chunks"
-    return {"mode": ctx, "budget_chars": budget, "note_max_chars": note_max}
+    return {"mode": ctx, "budget_chars": budget, "note_max_chars": note_max,
+            "chunks_only": chunks_only}
 
 
 def _zero_context(mode: str) -> dict:
@@ -2448,7 +2494,8 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
         snapshot = corpus_snapshot(corpus) if context_mode == "notes" else None
         assembled = assemble_context(hits, snapshot, mode=context_mode,
                                      budget_chars=csettings["budget_chars"],
-                                     note_max_chars=csettings["note_max_chars"])
+                                     note_max_chars=csettings["note_max_chars"],
+                                     chunks_only=csettings["chunks_only"])
         assemble_ms = int((_time.monotonic() - a0) * 1000)
         # display/audit source list stays sorted+deduped (byte-identical explain line);
         # in `chunks` mode included_sources == hit_sources, so this equals today's set.
@@ -2654,6 +2701,10 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             PROFILE_RETRIEVAL["budget_chars"] if PROFILE_RETRIEVAL else CONTEXT_BUDGET_CHARS)
         eff_note_max = note_max_chars if note_max_chars is not None else (
             PROFILE_RETRIEVAL["note_max_chars"] if PROFILE_RETRIEVAL else NOTE_MAX_CHARS)
+        # chunks_only has no CLI override; it follows the applied profile so the eval
+        # assembles exactly what a request would (ADR-0018 Update). Empty when unset.
+        eff_chunks_only = (PROFILE_RETRIEVAL.get("chunks_only", [])
+                           if PROFILE_RETRIEVAL else [])
         snapshot = eval_snapshot(corpus) if eff_context == "notes" else None
         snap_sec_by_ref: dict = {}
         if snapshot is not None:
@@ -2735,7 +2786,8 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
                         for j, (d, m) in enumerate(k_pairs)]
             assembled = assemble_context(
                 asm_hits, snapshot, mode=eff_context,
-                budget_chars=eff_budget, note_max_chars=eff_note_max)
+                budget_chars=eff_budget, note_max_chars=eff_note_max,
+                chunks_only=eff_chunks_only)
             context_chars.append(assembled.chars)
             asm_whole += sum(1 for r in assembled.reasons.values() if r == "whole")
             asm_fallbacks += assembled.fallbacks
