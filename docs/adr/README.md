@@ -13,9 +13,9 @@ one file per decision, in the order they were made.
 
 ## Format
 Short (Michael Nygard style). Each ADR has: **Status**, **Context**,
-**Options considered**, **Decision**, **Consequences**. ADRs are immutable once
-**Accepted** — we don't edit history; a later decision *supersedes* an earlier
-one and both stay in the log.
+**Options considered**, **Decision**, **Consequences**. Accepted decisions are
+never rewritten; corrections land as dated Updates. A later decision
+*supersedes* an earlier one and both stay in the log.
 
 **Statuses:** `Proposed` · `Accepted` · `Superseded by ADR-NNNN` · `Deprecated`
 
@@ -33,6 +33,7 @@ one and both stay in the log.
 | [0009](0009-observability.md) | Observability — OpenTelemetry tracing viewed in a local Phoenix | Accepted → **OTel + Phoenix, off by default** |
 | [0010](0010-document-ingestion-formats.md) | Document ingestion formats — PDF via pypdf (BSD) over pymupdf4llm (AGPL) | Accepted → **pypdf, flat text, no OCR** |
 | [0011](0011-strands-comparison.md) | Agentic orchestration trade-offs — Interchange's explicit loop vs. Strands' model-driven | Proposed → **reference architecture comparison** |
+| 0012 | _reserved, never written (see [0011](0011-strands-comparison.md))_ | — |
 | [0013](0013-a2a-agent-interop.md) | Agent-to-agent interop over A2A with signed Agent Cards | Accepted → **A2A 1.0 + 0.3 compat, signed card, pinned kid** |
 | [0014](0014-vault-corpus-and-measured-ablations.md) | Vault corpus: recursive ingestion, read-only profile, measured ablations | Accepted → **reranker trigger fired (hit@1 11→15/18); link expansion regressed, deferred** |
 | [0015](0015-browser-workbench-surface.md) | Browser workbench over the same governed pipeline — scored retrieval, policy tier, streamed stages | Accepted → **vendored no-build Preact at `/ui`, `POST /ask/stream` SSE, env-is-policy** |

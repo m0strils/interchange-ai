@@ -1,6 +1,6 @@
 # A2A Goal A acceptance result
 
-_Gate: `INTERCHANGE_ENGINE=claude-code scripts/a2a-accept.sh` on branch feat/a2a-demo at 3973085, run 2026-09-21 21:34 on a clean tree, exit code 0. Criteria: learning/a2a-acceptance-criteria.md (private). P1 ran on the Claude subscription; the demos ran on the stub engine at $0._
+_Gate: `INTERCHANGE_ENGINE=claude-code scripts/a2a-accept.sh` on branch feat/a2a-demo at 3973085, run 2026-09-21 21:34 on a clean tree, exit code 0. Criteria (summarised inline, enumerated as the PASS lines below): preconditions — interchange answers, the suite is green, `/health` is present, a2a-sdk 1.1.x is installed and unshadowed; demo runs — the hotel and rail demos each verify a signed card and cite a grounded answer as caller `a2a:requester` on the stub engine, leaving no server running; tests and scenarios — `test_a2a.py` is green with tampered/unsigned/unknown-`kid` cards rejected, injection over A2A failing the task without calling the engine, a missing API key returning 401, a profile switch changing corpus, streaming yielding WORKING then COMPLETED, MCP and A2A audit rows sharing keys, and the verifier pinning ES256 and rejecting a `jku` fetch; regression — the full suite is green and `eval/baseline.json` untouched; artifacts — the ADR, lesson, profiles, orchestrate card, feature file, 3+ hotel pages, per-agent tier declarations, and the README OWASP mapping + MCP/A2A table all present; hygiene — only public keys tracked, no `.env`/`audit.jsonl`, a clean tree, and no removed tests or added skip/xfail. P1 ran on the Claude subscription; the demos ran on the stub engine at $0._
 
 ```
 == Preconditions
@@ -28,7 +28,7 @@ PASS  AC6a  verifier pins algorithms=["ES256"]
 PASS  AC6b  key_provider handles jku (must raise)
 == Regression
 PASS  AC7   full suite green
-PASS  AC8   eval/baseline.json untouched
+PASS  AC8   no eval/baseline.json in the tree (the check is vacuous; the protected eval set is eval/golden.jsonl)
 == Artifacts
 PASS  AC9.a docs/adr/0013-a2a-agent-interop.md
 PASS  AC9.b lessons/07-a2a-handoff.md

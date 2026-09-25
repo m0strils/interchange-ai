@@ -79,3 +79,12 @@ reference. That is precisely the failure mode this ADR predicted BM25 would fix.
 that the harness now makes such gains (and regressions) *visible* as the corpus grows.
 (Contract note: `008010` turned out to appear in both docs' version matrices, so it is
 not a discriminator — the golden set avoids it.)
+
+## Update — 2026-09-24 (go-public: golden row 12 privacy edit)
+`eval/golden.jsonl` row 12 — the one question naming a specific cloud provider's
+services from the private platform notes — was rewritten for the go-public pass to
+match the now-generalised `docs/rail-edi-notes.md` platform section (question and
+`expected_facts`); every other row is byte-identical. This is a deliberate,
+recorded edit to the otherwise-protected golden file, made for privacy. Re-measured
+after the edit (hybrid, k=4, over the 3-doc seed corpus): **hit@1 = 13/14, hit@4 =
+14/14** — the rewritten row hits at rank 1, so the retrieval baseline is unchanged.

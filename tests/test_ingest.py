@@ -190,15 +190,17 @@ def test_discover_files_is_recursive_sorted_and_suffix_filtered(tmp_path, monkey
 
 
 def test_discover_files_seed_docs_pins_the_edi_corpus():
-    """The real docs/ corpus discovers EXACTLY the three seed documents.
+    """The real docs/ corpus discovers EXACTLY the two EDI/rail seed documents.
 
     This pins the committed ``docs/.interchangeignore`` — recursive discovery
-    must not pull the 14+ ADRs under ``docs/adr/`` into the edi index, which
-    would silently change the corpus the golden eval set is scored against."""
+    must not pull the ADRs under ``docs/adr/`` nor the acceptance-gate run
+    records (``workbench-RESULT.md``, ``a2a-RESULT.md``) into the edi index,
+    which would silently change the corpus the golden eval set is scored
+    against. ``a2a-RESULT.md`` was added to the ignore file in the go-public
+    pass (it is project meta, not EDI/rail domain knowledge)."""
     from interchange import DOCS_DIR, discover_files, rel_source
 
     assert [rel_source(DOCS_DIR, p) for p in discover_files(DOCS_DIR)] == [
-        "a2a-RESULT.md",
         "rail-edi-notes.md",
         "x12-overview.md",
     ]

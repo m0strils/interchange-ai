@@ -157,9 +157,7 @@ exist.
 - The plan's package name (`a2a_agent`, not `a2a`) and the ephemeral-demo-key
   approach (`a2a_agent/demo.sh` mints a throwaway ES256 pair per run and pins
   it via `A2A_PINNED_PUBLIC_KEY_PEM`, since a fresh clone has no private key)
-  were both already decided and built by the time this pass started — see
-  the "Package name" and "Gap the plan must close" sections of
-  `learning/a2a-acceptance-criteria.md`. `tests/test_a2a.py` uses the identical
+  were both already decided and built by the time this pass started. `tests/test_a2a.py` uses the identical
   pattern: each test mints its own ephemeral pair via
   `a2a_agent.keys.generate_keypair()` and monkeypatches the same env vars
   before calling `app.create_app()`, rather than relying on any committed key.

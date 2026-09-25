@@ -1,7 +1,6 @@
-# Rail EDI — quick reference (SAMPLE SEED — replace with your own notes)
+# Rail EDI — quick reference
 
-> Illustrative seed content. Swap in your your EDI platform design notes,
-> trading-partner rules, and transaction-set implementation guides.
+Public-knowledge seed reference for the X12/EDI + rail domain.
 
 ## Rail industry EDI
 North American freight/passenger rail exchanges standardized EDI, historically
@@ -19,11 +18,12 @@ trading partners.
 - **824 — Application Advice:** report processing results/errors back to the
   sending partner (widely used to signal validation failures).
 
-## Platform design notes (fill in your specifics)
-- Trading partners: Class I railroads + additional partners.
-- Transaction sets in scope: e.g., 161 and 824.
-- Reliability target and architecture: event-driven on AWS (ECS, EventBridge,
-  SQS, S3, Aurora); Java 17 / Spring Boot / Kafka; validation → Application
-  Advice (824) feedback loop.
-- Add: partner onboarding rules, version matrix (e.g., 008010 / 008050),
-  error-handling and supersede logic, SLAs.
+## Platform design notes
+A cloud event-driven EDI platform of this kind is typically assembled from
+managed containers behind an event bus, with queues for asynchronous
+processing, object storage for payloads, and a relational store for state. A
+JVM service stack (Java / Spring Boot) does the parsing and validation, and a
+validation → Application Advice (824) feedback loop reports processing results
+back to the sending trading partner. Rounding out the design: partner
+onboarding rules, a version matrix (for example, two X12 releases in flight at
+once), error-handling and supersede logic, and per-partner SLAs.

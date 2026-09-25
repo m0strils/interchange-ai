@@ -173,4 +173,6 @@ character budget to expand to its whole note (under a cap) or to bounded neighbo
 redistribute what is left. Measured: context@4 went from 2 of 7 to 7 of 7 and the graded
 answer-correctness from 40% to 93%, with zero per-row ranking changes. The lesson is the
 separation itself, and the discipline that made it honest: pre-register the numbers, build
-the metric before the fix, and keep the control pinned by a test.
+the metric before the fix, and keep the control pinned by a test. The brain numbers
+here are **measured on a private corpus** (a personal Obsidian vault, overlay-only per
+ADR-0016) and are not reproducible from this clone.

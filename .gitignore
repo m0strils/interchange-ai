@@ -10,14 +10,16 @@
 # runtime artifacts
 .chroma/
 audit.jsonl
-eval/grade-runs.jsonl
-eval/eval-runs.jsonl
+eval/*-runs.jsonl
 __pycache__/
 .venv/
 
 # pytest
 .pytest_cache/
 
-# acceptance run log + scratch drafts (ADR-0015 gate)
-eval/workbench-accept-runs.jsonl
+# macOS
+.DS_Store
+
+# scratch drafts (ADR-0015 gate) + working state (regenerated locally)
 eval/*.DRAFT-NOTES.md
+.claude/STATUS.md

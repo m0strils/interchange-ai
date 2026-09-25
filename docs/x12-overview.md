@@ -1,8 +1,6 @@
-# X12 / EDI — quick reference (SAMPLE SEED — replace with your own notes)
+# X12 / EDI — quick reference
 
-> This is illustrative seed content so the RAG pipeline has something to retrieve
-> tonight. Replace it with your real EDI/rail platform notes, runbooks, and
-> partner specs — that's what makes Interchange yours.
+Public-knowledge seed reference for the ANSI ASC X12 EDI standard.
 
 ## What X12 is
 ANSI ASC X12 is the dominant EDI standard for B2B document exchange in North

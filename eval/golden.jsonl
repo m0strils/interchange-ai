@@ -9,7 +9,7 @@
 {"question": "What is the 417 Rail Carrier Waybill Interchange used for?", "expected_source": "rail-edi-notes.md", "expected_facts": ["417", "waybill"]}
 {"question": "What is the 990 Response to a Load Tender?", "expected_source": "rail-edi-notes.md", "expected_facts": ["990", "load tender"]}
 {"question": "What role does the AAR play in rail industry EDI?", "expected_source": "rail-edi-notes.md", "expected_facts": ["aar", "association of american railroads"]}
-{"question": "What AWS services run the event-driven rail EDI platform?", "expected_source": "rail-edi-notes.md", "expected_facts": ["ecs", "eventbridge", "aurora"]}
+{"question": "What does the event-driven rail EDI platform architecture use?", "expected_source": "rail-edi-notes.md", "expected_facts": ["event bus", "queues", "object storage"]}
 {"question": "How does a railroad tell a trading partner that a received document failed validation?", "expected_source": "rail-edi-notes.md", "expected_facts": ["824", "application advice"]}
 {"question": "What is the 824 Application Advice transaction set?", "expected_source": "x12-overview.md", "expected_facts": ["824", "application advice"]}
 {"question": "What is the 850 Purchase Order transaction set and what data does it carry?", "unanswerable": true}

@@ -34,16 +34,20 @@ def test_profile_unset_env_var_fails_plainly(monkeypatch):
     assert "INTERCHANGE_VAULT_DIR" in str(exc_info.value)
 
 
-def test_profile_env_export_lines_include_ignore_and_golden(monkeypatch):
+def test_profile_env_export_lines_include_generic_ignore_and_no_golden(monkeypatch):
     from a2a_agent.profiles import load_profile, profile_env
 
     monkeypatch.setenv("INTERCHANGE_VAULT_DIR", VAULT_DIR)
     env = profile_env(load_profile("vault"))
     assert env["INTERCHANGE_COLLECTION"] == "vault"
     assert env["INTERCHANGE_DOCS_DIR"] == VAULT_DIR
-    assert "<secret-note>.md" in env["INTERCHANGE_IGNORE"]
-    assert "03-RESOURCES/last30days-research/" in env["INTERCHANGE_IGNORE"]
-    assert env["INTERCHANGE_GOLDEN"] == "eval/golden-vault.jsonl"
+    # The committed vault block is a generic shape: only generic Obsidian
+    # housekeeping ignores, no personal filenames or folder layout.
+    assert ".obsidian/" in env["INTERCHANGE_IGNORE"]
+    assert "Templates/" in env["INTERCHANGE_IGNORE"]
+    # It carries no personal golden set; a real one is referenced from the
+    # private overlay's `golden:` key (ADR-0016), never committed.
+    assert "INTERCHANGE_GOLDEN" not in env
 
 
 def test_rail_profile_unchanged_by_vault_block(monkeypatch):

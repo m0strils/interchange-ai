@@ -22,7 +22,7 @@ def test_parse_wikilinks_alias_heading_and_path_forms():
 
     text = (
         "See [[Note]], [[Note Two|its alias]], [[Note Three#Section]], "
-        "[[Note Four#Section|Alias]], [[Planning/ROADMAP|Telnyx Migration Roadmap]] "
+        "[[Note Four#Section|Alias]], [[Planning/ROADMAP|Vendor Migration Roadmap]] "
         "and [[../_Tag_Taxonomy|Tag Taxonomy]]."
     )
     assert parse_wikilinks(text) == [

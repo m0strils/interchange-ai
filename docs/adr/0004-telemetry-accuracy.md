@@ -92,8 +92,8 @@ The **same failure class** as the 2026-09-22 update — the headless generation
 session picking up ambient config and returning *it* in place of the answer — has a
 second source, so this update lands on the ADR that owns that story rather than a new
 one. `--setting-sources user` loads user settings, and **that pulls in every MCP
-server in `~/.claude.json`**. On this machine that is now **two Obsidian vault
-connectors**. `interchange._generate_claude_code` runs `claude -p` with no MCP
+server in `~/.claude.json`**. These are **user-scope MCP servers** (on the reference machine, two Obsidian
+connectors). `interchange._generate_claude_code` runs `claude -p` with no MCP
 restriction, so both servers load into a session that should only generate text from
 the context it was handed: the model spends tokens on their tool descriptions,
 attempts calls, is denied, and narrated *"both Obsidian connectors were denied"*
