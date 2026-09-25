@@ -146,24 +146,55 @@ def profile_persona(profile: dict) -> str | None:
 
 
 def profile_retrieval(profile: dict) -> dict:
-    """The profile's retrieval policy: ``{"mode": str, "rerank": str | None}``.
+    """The profile's retrieval policy:
+    ``{"mode", "rerank", "context", "budget_chars", "note_max_chars"}``.
 
-    Defaults to ``{"mode": "hybrid", "rerank": None}`` when the profile carries no
-    ``retrieval`` block. ``mode`` is validated against ``interchange.MODES`` (a lazy
-    import, to avoid an import cycle); an unknown mode raises ``ValueError`` naming
-    the profile and the offending mode.
+    ``mode`` / ``rerank`` are unchanged (default ``hybrid`` / ``None``). The context
+    keys (ADR-0018) default to ``chunks`` and the ``interchange`` constants when the
+    ``retrieval`` block omits them. Validation (a lazy ``interchange`` import, to
+    avoid an import cycle): ``mode`` in ``MODES``; ``context`` in ``CONTEXT_MODES``;
+    ``budget_chars`` / ``note_max_chars`` positive ``int`` (a string like ``"12000"``
+    is rejected — clamping is policy's job, not the profile's); and
+    ``note_max_chars <= budget_chars``. Every failure raises a ``ValueError`` naming
+    the profile and the offending key.
     """
     block = profile.get("retrieval") or {}
     mode = block.get("mode", "hybrid")
     rerank = block.get("rerank")
-    from interchange import MODES  # lazy: interchange imports are heavier + can cycle
+    from interchange import (  # lazy: interchange imports are heavier + can cycle
+        CONTEXT_BUDGET_CHARS,
+        CONTEXT_MODES,
+        MODES,
+        NOTE_MAX_CHARS,
+    )
 
+    name = profile.get("name")
     if mode not in MODES:
         raise ValueError(
-            f"profile {profile.get('name')!r}: unknown retrieval mode {mode!r}; "
+            f"profile {name!r}: unknown retrieval mode {mode!r}; "
             f"expected one of {MODES}"
         )
-    return {"mode": str(mode), "rerank": rerank}
+    context = block.get("context", CONTEXT_MODES[0])
+    if context not in CONTEXT_MODES:
+        raise ValueError(
+            f"profile {name!r}: unknown context mode {context!r}; "
+            f"expected one of {CONTEXT_MODES}"
+        )
+    budget_chars = block.get("budget_chars", CONTEXT_BUDGET_CHARS)
+    note_max_chars = block.get("note_max_chars", NOTE_MAX_CHARS)
+    for key, value in (("budget_chars", budget_chars),
+                       ("note_max_chars", note_max_chars)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"profile {name!r}: {key} must be a positive int, got {value!r}"
+            )
+    if note_max_chars > budget_chars:
+        raise ValueError(
+            f"profile {name!r}: note_max_chars ({note_max_chars}) must be "
+            f"<= budget_chars ({budget_chars})"
+        )
+    return {"mode": str(mode), "rerank": rerank, "context": str(context),
+            "budget_chars": budget_chars, "note_max_chars": note_max_chars}
 
 
 def profile_tools(profile: dict) -> list[str]:

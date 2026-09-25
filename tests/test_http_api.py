@@ -17,7 +17,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 import app as http_app
 import enterprise
 import interchange
-from tests.conftest import fake_retrieval, last_audit_row
+from tests.conftest import fake_retrieval, fake_snapshot, last_audit_row
 
 scenarios("http_api.feature")
 
@@ -149,6 +149,88 @@ def first_example_mentions(context, needle):
     examples = context["response"].json()["examples"]
     assert examples, "no examples returned"
     assert needle in examples[0]
+
+
+# --- metered daily budget on the /ask path (2026-09-24 plan review) --------
+@given(parsers.parse('the daily metered budget is "{usd}"'))
+def daily_budget_is(monkeypatch, usd):
+    monkeypatch.setenv("INTERCHANGE_METERED_BUDGET_USD", usd)
+
+
+@given(parsers.parse('a billed API generation cost of "{usd}" was recorded today'))
+def billed_api_row_today(usd):
+    # engine="api" makes marginal_usd == cost_usd (> 0), so spend_today counts it.
+    enterprise.audit(question="prior", model=interchange.MODEL, sources=[], in_tokens=0,
+                     out_tokens=0, latency_ms=0, grounded=True, telemetry="measured",
+                     cost_usd=float(usd), engine="api")
+
+
+@given(parsers.parse('the configured engine is "{engine}"'))
+def configured_engine(monkeypatch, engine):
+    # The Background delenv'd INTERCHANGE_ENGINE; pin it so default_engine() decides
+    # whether the request is a metered (`api`) generation or a $0 subscription one.
+    monkeypatch.setenv("INTERCHANGE_ENGINE", engine)
+
+
+@when(parsers.parse('I POST "{path}" with question "{question}"'))
+def i_post_ask(context, client, path, question):
+    context["response"] = client.post(path, json={"q": question})
+
+
+@when(parsers.parse('I POST "{path}" with an unknown field'))
+def i_post_unknown_field(context, client, path):
+    # the body is otherwise VALID (`q` present) and carries one unknown key, so the
+    # 422 can only come from extra="forbid". `context` is now a KNOWN (locked) knob
+    # (ADR-0018), so an unknown field is a genuinely unrecognised key here.
+    context["response"] = client.post(path, json={"q": "what is a 997?", "nonsuch": "x"})
+
+
+@then(parsers.parse('the error code is "{code}"'))
+def error_code_is(context, code):
+    assert context["response"].json()["code"] == code, context["response"].text
+
+
+# --- ADR-0018 context knob (HTTP policy tier) ------------------------------
+@given("the context knob is unlocked")
+def context_knob_unlocked(monkeypatch):
+    monkeypatch.setenv("INTERCHANGE_UNLOCKED", "context")
+
+
+@given("the snapshot assembles the retrieved note")
+def snapshot_assembles_note(monkeypatch):
+    # the Background's retrieve fake returns x12-overview.md:0; supply that note so
+    # `notes` assembly has a snapshot and never touches Chroma.
+    monkeypatch.setattr(
+        interchange, "corpus_snapshot",
+        lambda c: fake_snapshot({"x12-overview.md": [
+            "An 824 reports application errors.", "Further 824 detail."]}))
+
+
+@when(parsers.parse('I POST "{path}" naming context "{mode}"'))
+def i_post_naming_context(context, client, path, mode):
+    context["response"] = client.post(path, json={"q": "what is an 824?", "context": mode})
+
+
+@then(parsers.parse('the response message is "{message}"'))
+def response_message_is(context, message):
+    assert context["response"].json()["message"] == message, context["response"].text
+
+
+@then(parsers.parse('the response context mode is "{mode}"'))
+def response_context_mode_is(context, mode):
+    assert context["response"].json()["context"]["mode"] == mode
+
+
+@then("the options context knob is locked")
+def options_context_knob_locked(context):
+    knob = context["response"].json()["context"]
+    assert knob["locked"] is True
+    assert "value" in knob
+
+
+@then(parsers.parse('an audit row records blocked "{reason}"'))
+def audit_row_records_blocked(context, reason):
+    assert last_audit_row()["blocked"] == reason
 
 
 # --- units -----------------------------------------------------------------

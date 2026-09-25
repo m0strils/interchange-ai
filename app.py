@@ -42,6 +42,7 @@ import threading
 import uuid
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -112,12 +113,18 @@ class PinRef(BaseModel):
 
 
 class AskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     q: str = Field(..., max_length=8000, examples=["what is an 824?"])
     corpus: str | None = None
     mode: Mode | None = Field(None, examples=["hybrid"])
     k: int | None = Field(None, ge=1, le=DENSE_POOL, examples=[4])
     rerank: Rerank | None = Field(None, examples=["none"])
     pin: list[PinRef] | None = Field(None, max_length=DENSE_POOL)
+    # ADR-0018 context knob: a known field (so extra="forbid" no longer rejects it),
+    # but LOCKED by default — the policy tier answers 403 unless INTERCHANGE_UNLOCKED
+    # lists "context". None means "let the corpus profile decide".
+    context: Literal["chunks", "notes"] | None = Field(None, examples=["notes"])
 
 
 class Hit(BaseModel):
@@ -173,6 +180,23 @@ class Scoring(BaseModel):
     rerank_score: LegendEntry | None = None
 
 
+class ContextInfo(BaseModel):
+    """The mode-independent context-assembly telemetry (ADR-0018): present in ``chunks``
+    mode too, so the schema never depends on mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+    chunks_in: int
+    chunks_out: int
+    chars: int
+    budget_hit: bool
+    fallbacks: int
+    dropped_hits: int
+    secret_drops: int
+    assemble_ms: int
+
+
 class AskResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -192,6 +216,7 @@ class AskResponse(BaseModel):
     mode_effective: str
     k: int
     pinned: bool
+    context: ContextInfo
     corpus: str
     request_id: str
     audit_id: str | None
@@ -218,6 +243,7 @@ class DoneEvent(BaseModel):
     mode_effective: str
     k: int
     pinned: bool
+    context: ContextInfo
     corpus: str
     request_id: str
     audit_id: str | None
@@ -260,6 +286,17 @@ class RangeKnob(BaseModel):
     reason: str | None = None
 
 
+class ContextKnob(BaseModel):
+    """The context knob (ADR-0018): its resolved profile default for the default corpus
+    (clamped by policy) and whether the request may set it (locked unless
+    ``INTERCHANGE_UNLOCKED`` lists ``context``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    locked: bool
+
+
 class MeteredInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -289,6 +326,7 @@ class OptionsResponse(BaseModel):
     mode: ChoiceKnob
     rerank: RerankKnob
     k: RangeKnob
+    context: ContextKnob
     metered: MeteredInfo
     index: IndexInfo
     engine: str
@@ -309,10 +347,10 @@ class PolicyReject(Exception):
         self.retry_after = retry_after
 
 
-def _resolve_request(corpus, mode, k, rerank) -> dict:
+def _resolve_request(corpus, mode, k, rerank, context=None) -> dict:
     """Apply the policy tier to a request's preferences; raise ``PolicyReject`` on any
     override the operator forbids (403), or an illegal combination (422). Returns the
-    effective ``{corpus, mode, k, rerank_backend}``."""
+    effective ``{corpus, mode, k, rerank_backend, context}``."""
     allowed = policy.corpora()
     corpus = corpus or policy.default_corpus()
     if corpus not in allowed:
@@ -326,6 +364,11 @@ def _resolve_request(corpus, mode, k, rerank) -> dict:
         raise PolicyReject("knob_locked", 403, "Rerank is locked by policy.")
     if k is not None and "k" in locked:
         raise PolicyReject("knob_locked", 403, "K is locked by policy.")
+    # ADR-0018: the context knob is locked by DEFAULT — a body may name it only when
+    # the operator opted it into INTERCHANGE_UNLOCKED. Unset (None) is never a lock
+    # violation: the corpus profile then decides inside answer_detail (clamped by policy).
+    if context is not None and "context" not in policy.unlocked_knobs():
+        raise PolicyReject("knob_locked", 403, "Context is locked by policy.")
 
     mode_v = mode.value if mode else "hybrid"
     rerank_v = rerank.value if rerank else "none"
@@ -344,7 +387,8 @@ def _resolve_request(corpus, mode, k, rerank) -> dict:
             raise PolicyReject(code, 403, reason)
 
     return {"corpus": corpus, "mode": mode_v, "k": k_v,
-            "rerank_backend": None if rerank_v == "none" else rerank_v}
+            "rerank_backend": None if rerank_v == "none" else rerank_v,
+            "context": context}
 
 
 def _busy(correlation_id: str, caller: str) -> JSONResponse:
@@ -406,7 +450,7 @@ def _web_auth(request: Request, correlation_id: str) -> tuple[str, JSONResponse 
 
 
 def _preflight(request: Request, correlation_id: str, corpus, mode, k, rerank,
-               cross_site_check: bool) -> tuple[dict | None, str | None, JSONResponse | None]:
+               cross_site_check: bool, context=None) -> tuple[dict | None, str | None, JSONResponse | None]:
     """Everything before the pipeline: cross-site refusal, fail-closed auth, policy
     resolution, rate limit and metered budget. Returns ``(resolved, caller, error)``;
     exactly one of ``resolved``/``error`` is set. Rate-limit and budget refusals are
@@ -420,7 +464,7 @@ def _preflight(request: Request, correlation_id: str, corpus, mode, k, rerank,
     ctoken = enterprise.CALLER.set(caller)
     try:
         try:
-            resolved = _resolve_request(corpus, mode, k, rerank)
+            resolved = _resolve_request(corpus, mode, k, rerank, context)
         except PolicyReject as pr:
             return None, None, _error(pr.code, pr.status, correlation_id, pr.message,
                                       retry_after=pr.retry_after)
@@ -434,23 +478,32 @@ def _preflight(request: Request, correlation_id: str, corpus, mode, k, rerank,
             return None, None, _error("rate_limited", 429, correlation_id,
                                       "rate limit exceeded", retry_after=retry)
 
-        if resolved["rerank_backend"] == "typesafe" and policy.budget_exceeded():
+        # The daily budget gates every *metered* path, not just metered rerank:
+        # `api` generation is billed too (its cost is `measured`, so review #2's
+        # ledger check must see it). `stub` and `claude-code` are $0 and never gate.
+        metered: list[str] = []
+        if default_engine() == "api":
+            metered.append("generation")
+        if resolved["rerank_backend"] == "typesafe":
+            metered.append("rerank")
+        if metered and policy.budget_exceeded():
             enterprise.audit(question="", model=interchange.MODEL, sources=[], in_tokens=0,
                              out_tokens=0, latency_ms=0, grounded=False,
                              blocked="budget", engine=default_engine())
             return None, None, _error("budget_exceeded", 429, correlation_id,
-                                      "daily metered budget exceeded")
+                                      f"daily metered budget exceeded ({' and '.join(metered)})")
         return resolved, caller, None
     finally:
         enterprise.CALLER.reset(ctoken)
 
 
-def _run_ask(request: Request, q, corpus, mode, k, rerank, pin, cross_site_check) -> JSONResponse:
+def _run_ask(request: Request, q, corpus, mode, k, rerank, pin, cross_site_check,
+             context=None) -> JSONResponse:
     """The synchronous /ask path: policy pre-flight, semaphore, the governed pipeline,
     and the error catalogue on any failure (never the raw exception on the wire)."""
     correlation_id = uuid.uuid4().hex[:12]
     resolved, caller, err = _preflight(request, correlation_id, corpus, mode, k, rerank,
-                                       cross_site_check)
+                                       cross_site_check, context=context)
     if err is not None:
         return err
 
@@ -463,6 +516,7 @@ def _run_ask(request: Request, q, corpus, mode, k, rerank, pin, cross_site_check
             q, engine=default_engine(), collection=resolved["corpus"],
             mode=resolved["mode"], top_k=resolved["k"],
             rerank_backend=resolved["rerank_backend"], pin=pin,
+            context=resolved["context"],
         )
     except PermissionError:
         return _error("pin_invalid", 403, correlation_id, "one or more pins are invalid")
@@ -645,6 +699,11 @@ def create_app() -> FastAPI:
                        "unavailable": rerank_unavailable},
             "k": {"min": 1, "max": DENSE_POOL, "default": interchange.TOP_K,
                   "locked": "k" in locked, "reason": _reason("k")},
+            # ADR-0018: the profile default for the default corpus, clamped by policy
+            # (policy over profile via resolve_context -> clamp_context); locked unless
+            # the operator opted "context" into INTERCHANGE_UNLOCKED.
+            "context": {"value": interchange.resolve_context(corpus=corpus)["mode"],
+                        "locked": "context" not in policy.unlocked_knobs()},
             "metered": {"allowed": policy.allow_metered(),
                         "budget_usd": policy.metered_budget_usd(),
                         "spent_today_usd": round(policy.estimated_spend_today(), 6),
@@ -682,7 +741,7 @@ def create_app() -> FastAPI:
     def ask_post(request: Request, body: AskRequest = Body(...)) -> JSONResponse:
         pin = [p.model_dump() for p in body.pin] if body.pin else None
         return _run_ask(request, body.q, body.corpus, body.mode, body.k, body.rerank,
-                        pin, cross_site_check=True)
+                        pin, cross_site_check=True, context=body.context)
 
     @app.post("/ask/stream", response_class=StreamingResponse, responses={
         200: {"content": {"text/event-stream": {}},
@@ -731,7 +790,8 @@ def create_app() -> FastAPI:
         correlation_id = uuid.uuid4().hex[:12]
         pin = [p.model_dump() for p in body.pin] if body.pin else None
         resolved, caller, err = _preflight(request, correlation_id, body.corpus, body.mode,
-                                           body.k, body.rerank, cross_site_check=True)
+                                           body.k, body.rerank, cross_site_check=True,
+                                           context=body.context)
         if err is not None:
             return err
 
@@ -768,7 +828,7 @@ def create_app() -> FastAPI:
                     body.q, engine=engine, collection=resolved["corpus"],
                     mode=resolved["mode"], top_k=resolved["k"],
                     rerank_backend=resolved["rerank_backend"], pin=pin,
-                    on_event=on_event, cancel=cancel,
+                    context=resolved["context"], on_event=on_event, cancel=cancel,
                 )
                 _put(("result", detail))
             except PermissionError:

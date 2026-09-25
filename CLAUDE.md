@@ -24,14 +24,20 @@ scripts/a2a-accept.sh                               # A2A Goal A acceptance gate
 make workbench-accept                               # real-engine acceptance gate (ADR-0015): 5 claude -p calls on the subscription, $0 marginal; WB_ENGINE=stub self-tests at $0
 make reindex PROFILE=vault                          # index a profile's corpus in-process via --profile (ADR-0016); vault still needs INTERCHANGE_VAULT_DIR unless an overlay sets docs_dir
 make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the profile's golden set (ADR-0014); MODE unset = the profile's declared default
-python interchange.py --profile brain --ask "…"     # any profile, including ones defined only in the private overlay (~/.interchange/profiles.yaml, ADR-0016)
+python interchange.py --profile brain --ask "…"     # any profile; --context notes|chunks --budget-chars N --note-max-chars N override the profile (ADR-0018)
+make eval PROFILE=brain K=4 CONTEXT=notes           # passage@k, context@k, note@k, chars on the assembled context (ADR-0017/0018)
+# any profile, including ones defined only in the private overlay (~/.interchange/profiles.yaml, ADR-0016)
 python interchange.py --profile brain --golden-add --question "…" --expected "path/in/corpus.md"   # eval-as-you-go: append a validated golden row
 scripts/launchd/install.sh brain                    # nightly 03:30 full reindex for one profile (read-only, $0); measured 30 s for 4,614 chunks
 # ^ INTERCHANGE_CHROMA_DIR relocates the store (one per machine, N collections); INTERCHANGE_PROFILES="" disables the overlay (the test gate pins it off)
 ```
 
-**Status:** ADR-0016 in progress on `feature/corpus-profiles` — **corpus profiles as
-portable data**: a private overlay (`INTERCHANGE_PROFILES`) adds or extends profiles outside
+**Status:** ADR-0018 shipped on `feature/passage-eval` — **context assembly with a budget**: the
+retrieval unit stays the chunk, the context unit becomes the note; fair-share expansion after
+ranking, measured (brain context@4 2/7 → 7/7, graded 40% → 93%, zero ranking changes), HTTP
+`context` knob locked by default, judge grades the governed path. ADR-0017 kept the passage
+metric and rejected the ingest merge on measurement. Before it, ADR-0016 on
+`feature/corpus-profiles` — **corpus profiles as portable data**: a private overlay (`INTERCHANGE_PROFILES`) adds or extends profiles outside
 the tree, `INTERCHANGE_CHROMA_DIR` relocates the store, `--profile` applies a profile
 in-process (retiring the export-before-`.env` edge), and `persona` / `retrieval` / `tools`
 are profile keys resolved per request by collection. The owner's second brain (a new

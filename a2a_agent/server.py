@@ -186,10 +186,15 @@ def _answer_as(label: str, question: str, collection: str | None = None) -> dict
     """
     token = enterprise.CALLER.set(f"a2a:{label}")
     try:
+        # ADR-0018: pass mode/context as None so answer_detail's single resolver reads
+        # this collection's profile (retrieval mode AND context settings alike) — closing
+        # the old mismatch where A2A ignored the profile's mode and always ran hybrid.
         return interchange.answer_detail(
             question,
             engine=os.environ.get("INTERCHANGE_ENGINE", "api"),
             collection=collection,
+            mode=None,
+            context=None,
         )
     finally:
         enterprise.CALLER.reset(token)

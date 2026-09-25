@@ -122,3 +122,26 @@ def test_headless_call_restricts_setting_sources(monkeypatch):
     for argv in (rag["argv"], sub["argv"]):
         assert "--setting-sources" in argv
         assert argv[argv.index("--setting-sources") + 1] == "user"
+
+
+def test_headless_calls_restrict_mcp_and_tools(monkeypatch):
+    """MCP/tool hygiene (feature/passage-eval): both headless call sites pass
+    `--strict-mcp-config` so the machine's user-scope MCP servers (Obsidian) never
+    load. The RAG path carries no `--mcp-config` and disables all built-in tools
+    (`--tools ""`); the agent path keeps exactly one `--mcp-config` (interchange)."""
+    rag: dict = {}
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(subprocess, "run", _recording_run(rag))
+    interchange._generate_claude_code("ctx")
+
+    sub: dict = {}
+    monkeypatch.setattr(agent_sub.subprocess, "run", _recording_run(sub))
+    monkeypatch.setattr(agent_sub.shutil, "which", lambda name: "/usr/bin/claude")
+    agent_sub.answer_agentic_sub("what is a 214?")
+
+    assert "--strict-mcp-config" in rag["argv"]
+    assert "--mcp-config" not in rag["argv"]
+    assert rag["argv"][rag["argv"].index("--tools") + 1] == ""
+
+    assert "--strict-mcp-config" in sub["argv"]
+    assert sub["argv"].count("--mcp-config") == 1

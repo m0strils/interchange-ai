@@ -61,3 +61,44 @@ Feature: HTTP API
     When I GET "/options"
     Then the response status is 200
     And the first example mentions "997"
+
+  Scenario: A metered generation request is refused once the daily budget is spent
+    Given the daily metered budget is "0.01"
+    And a billed API generation cost of "0.02" was recorded today
+    And the configured engine is "api"
+    When I POST "/ask" with question "what is an 824?"
+    Then the response status is 429
+    And the error code is "budget_exceeded"
+    And an audit row records blocked "budget"
+
+  Scenario: A subscription request is not budget-gated
+    Given the daily metered budget is "0.01"
+    And a billed API generation cost of "0.02" was recorded today
+    And the configured engine is "stub"
+    When I POST "/ask" with question "what is an 824?"
+    Then the response status is 200
+    And the response is grounded
+
+  Scenario: An unknown request field is rejected
+    When I POST "/ask" with an unknown field
+    Then the response status is 422
+    And the error code is "invalid_request"
+
+  Scenario: The context knob is locked by default so a body naming it is refused
+    When I POST "/ask" naming context "notes"
+    Then the response status is 403
+    And the error code is "knob_locked"
+    And the response message is "Context is locked by policy."
+
+  Scenario: An unlocked context knob is honoured and assembled by note
+    Given the context knob is unlocked
+    And the snapshot assembles the retrieved note
+    When I POST "/ask" naming context "notes"
+    Then the response status is 200
+    And the response is grounded
+    And the response context mode is "notes"
+
+  Scenario: The options document reports the context knob and its lock state
+    When I GET "/options"
+    Then the response status is 200
+    And the options context knob is locked

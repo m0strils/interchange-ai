@@ -9,6 +9,7 @@ Two guarantees enforced here:
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 
@@ -59,6 +60,35 @@ def fake_retrieval(*hits, corpus: str = "edi"):
         timings={"dense_ms": 1, "bm25_ms": 1, "rrf_ms": 0, "rerank_ms": 0},
         space="l2", corpus=corpus,
     )
+
+
+def fake_snapshot(notes: dict) -> interchange.Snapshot:
+    """An offline ``interchange.Snapshot`` for context assembly (ADR-0018 Slice B).
+
+    ``notes`` maps each source to its per-source chunk texts, in chunk-index order;
+    chunk ``j`` becomes id ``f"{source}:{j}"`` with metas
+    ``{source, chunk, section, title, lead}`` (``lead`` on chunk 0). The ids/docs/
+    metas lists are then **deliberately shuffled** with a fixed seed, so a test that
+    relies on note order proves ``chunk_map`` sorts by chunk index rather than by
+    Chroma's ``get`` order. ``bm25`` is ``None`` (assembly never touches it).
+    """
+    ids: list[str] = []
+    docs: list[str] = []
+    metas: list[dict] = []
+    for source, chunks in notes.items():
+        title = source[:-3] if source.endswith(".md") else source
+        for j, text in enumerate(chunks):
+            ids.append(f"{source}:{j}")
+            docs.append(text)
+            metas.append({"source": source, "chunk": j, "section": f"section-{j}",
+                          "title": title, "lead": j == 0})
+    order = list(range(len(ids)))
+    random.Random(1234).shuffle(order)          # prove chunk_map sorts, not list order
+    ids = [ids[i] for i in order]
+    docs = [docs[i] for i in order]
+    metas = [metas[i] for i in order]
+    return interchange.Snapshot(count=len(ids), ids=ids, docs=docs, metas=metas,
+                                bm25=None, space="l2")
 
 
 @pytest.fixture

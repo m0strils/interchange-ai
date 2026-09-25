@@ -54,6 +54,18 @@ def locked_knobs() -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
+def unlocked_knobs() -> set[str]:
+    """Knobs that are **locked by default** and a request may name only when the
+    operator opts them in via ``INTERCHANGE_UNLOCKED`` (comma list; default empty).
+
+    ADR-0018 locks the HTTP ``context`` knob by default — a shared/public surface must
+    not let a caller widen its own context to whole notes over a personal vault — so it
+    is honoured only when ``"context"`` appears here. This is the inverse of
+    ``locked_knobs`` (which starts open and names what to close)."""
+    raw = os.environ.get("INTERCHANGE_UNLOCKED", "")
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
 def allow_metered() -> bool:
     """Whether ``rerank=typesafe`` is permitted at all (``INTERCHANGE_ALLOW_METERED``)."""
     return os.environ.get("INTERCHANGE_ALLOW_METERED", "0") == "1"
@@ -74,6 +86,55 @@ def rate_per_min() -> int:
 def ui_enabled() -> bool:
     """Whether the ``/ui`` mount is served (``INTERCHANGE_UI``; ``0`` = API-only)."""
     return os.environ.get("INTERCHANGE_UI", "1") != "0"
+
+
+# --- context-assembly clamp (ADR-0018; policy over profile) ----------------
+#: Context modes in increasing order of how much context they assemble.
+_CONTEXT_MODE_ORDER = ("chunks", "notes")
+
+
+def context_mode_max() -> str:
+    """The most permissive context mode a profile may resolve to (ADR-0018).
+
+    ``INTERCHANGE_CONTEXT_MODE_MAX`` if set, else ``chunks`` on a genuinely public
+    deploy and ``notes`` locally — reusing ``auth_required()`` (a public host is one
+    whose ``A2A_PUBLIC_URL`` is not localhost), so the default tracks the same
+    public-deploy signal the auth rule does.
+    """
+    default = "chunks" if auth_required() else "notes"
+    return os.environ.get("INTERCHANGE_CONTEXT_MODE_MAX", default)
+
+
+def context_budget_max() -> int:
+    """The budget ceiling a profile's ``budget_chars`` is capped at
+    (``INTERCHANGE_CONTEXT_BUDGET_MAX``, default 24000)."""
+    return int(os.environ.get("INTERCHANGE_CONTEXT_BUDGET_MAX", "24000"))
+
+
+def clamp_context(settings: dict) -> dict:
+    """Clamp resolved context ``settings`` by policy (ADR-0018): policy over profile.
+
+    Lowers ``context`` to ``context_mode_max()`` (``chunks`` < ``notes``) and caps
+    ``budget_chars`` at ``context_budget_max()``, then restores the
+    ``note_max_chars <= budget_chars`` invariant if the cap made it too big. Pure;
+    returns a new dict and leaves keys it does not manage untouched.
+    """
+    out = dict(settings)
+
+    def _rank(mode: str) -> int:
+        return _CONTEXT_MODE_ORDER.index(mode) if mode in _CONTEXT_MODE_ORDER else 0
+
+    mode_max = context_mode_max()
+    if "context" in out and _rank(out["context"]) > _rank(mode_max):
+        out["context"] = mode_max
+
+    budget_max = context_budget_max()
+    if out.get("budget_chars") is not None and out["budget_chars"] > budget_max:
+        out["budget_chars"] = budget_max
+    if (out.get("note_max_chars") is not None and out.get("budget_chars") is not None
+            and out["note_max_chars"] > out["budget_chars"]):
+        out["note_max_chars"] = out["budget_chars"]
+    return out
 
 
 # --- fail-closed public auth (review #10) ----------------------------------
@@ -219,11 +280,21 @@ def reset_semaphore() -> None:
 
 
 # --- metered daily budget (from the audit ledger) --------------------------
-def estimated_spend_today() -> float:
-    """Sum of ``cost_usd`` over today's audit rows labelled ``telemetry=="estimated"``.
+def spend_today() -> float:
+    """Sum of ``cost_usd`` over today's audit rows that were **actually billed** —
+    every row whose ``marginal_usd > 0`` (``api`` generation and metered rerank).
 
-    The budget is enforced against the same honest ledger ``--audit`` reports, so a
-    day's metered spend cannot exceed ``INTERCHANGE_METERED_BUDGET_USD`` (review #2).
+    This is the honest daily metered spend the budget is enforced against, read
+    from the same ledger ``--audit`` reports, so a day's metered spend cannot exceed
+    ``INTERCHANGE_METERED_BUDGET_USD`` (review #2).
+
+    Prior to the 2026-09-24 plan review this summed only ``telemetry == "estimated"``
+    rows (defect #1). The ``api`` engine reports ``telemetry: "measured"`` whenever
+    real token usage is present, so genuine API generation cost — the largest metered
+    line — was silently excluded and never counted against the budget. Keying on
+    ``marginal_usd`` (what the ledger records as actually paid) counts measured API
+    rows and estimated metered-rerank rows alike, and still ignores subscription rows
+    ($0 marginal).
     """
     path = enterprise.AUDIT_PATH
     if not path.exists():
@@ -238,13 +309,24 @@ def estimated_spend_today() -> float:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if row.get("telemetry") == "estimated" and str(row.get("ts", "")).startswith(today):
+        if (row.get("marginal_usd", 0) or 0) > 0 and str(row.get("ts", "")).startswith(today):
             total += row.get("cost_usd", 0) or 0
     return total
 
 
+def estimated_spend_today() -> float:
+    """Deprecated alias for :func:`spend_today`.
+
+    The old name is a misnomer: the budget counts every *billed* row
+    (``marginal_usd > 0``), measured or estimated — not only ``telemetry ==
+    "estimated"`` ones (defect #1, 2026-09-24 plan review). New code should call
+    :func:`spend_today`; this alias is kept for existing callers.
+    """
+    return spend_today()
+
+
 def budget_exceeded() -> bool:
-    return estimated_spend_today() >= metered_budget_usd()
+    return spend_today() >= metered_budget_usd()
 
 
 # --- error catalogue (review #11) ------------------------------------------
