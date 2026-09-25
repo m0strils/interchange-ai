@@ -22,12 +22,22 @@ INTERCHANGE_ENGINE=stub python -m uvicorn app:app   # browser workbench at /ui +
 make a2a-demo PROFILE=hotel                         # two-agent A2A demo, $0 on the stub engine (rail|hotel)
 scripts/a2a-accept.sh                               # A2A Goal A acceptance gate (run with INTERCHANGE_ENGINE=claude-code)
 make workbench-accept                               # real-engine acceptance gate (ADR-0015): 5 claude -p calls on the subscription, $0 marginal; WB_ENGINE=stub self-tests at $0
-make reindex PROFILE=vault                          # index the read-only Obsidian vault corpus (ADR-0014)
-make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the vault golden set (ADR-0014)
-# ^ export INTERCHANGE_VAULT_DIR before both — DOCS_DIR resolves at import, before .env loads (ADR-0014)
+make reindex PROFILE=vault                          # index a profile's corpus in-process via --profile (ADR-0016); vault still needs INTERCHANGE_VAULT_DIR unless an overlay sets docs_dir
+make eval PROFILE=vault MODE=all K=4                # measured retrieval ablations over the profile's golden set (ADR-0014); MODE unset = the profile's declared default
+python interchange.py --profile brain --ask "…"     # any profile, including ones defined only in the private overlay (~/.interchange/profiles.yaml, ADR-0016)
+python interchange.py --profile brain --golden-add --question "…" --expected "path/in/corpus.md"   # eval-as-you-go: append a validated golden row
+scripts/launchd/install.sh brain                    # nightly 03:30 full reindex for one profile (read-only, $0); measured 30 s for 4,614 chunks
+# ^ INTERCHANGE_CHROMA_DIR relocates the store (one per machine, N collections); INTERCHANGE_PROFILES="" disables the overlay (the test gate pins it off)
 ```
 
-**Status:** ADR-0015 shipped — a same-origin **browser workbench** at `/ui` over the
+**Status:** ADR-0016 in progress on `feature/corpus-profiles` — **corpus profiles as
+portable data**: a private overlay (`INTERCHANGE_PROFILES`) adds or extends profiles outside
+the tree, `INTERCHANGE_CHROMA_DIR` relocates the store, `--profile` applies a profile
+in-process (retiring the export-before-`.env` edge), and `persona` / `retrieval` / `tools`
+are profile keys resolved per request by collection. The owner's second brain (a new
+Obsidian vault) and a `research` corpus over saved last30days dumps are overlay-only
+profiles; nothing personal enters the repo. Rebuild times are **measured** (vault 30 s,
+brain 3 s); incremental reindex stays trigger-gated. Before it, ADR-0015 shipped — a same-origin **browser workbench** at `/ui` over the
 same governed pipeline: scored retrieval (`retrieve_detail`, honest score labels), a
 policy tier (`policy.py`: env is policy, request is preference, policy wins), pins as
 HMAC capability tokens, a ledger-enforced metered budget, a per-host rate limit +

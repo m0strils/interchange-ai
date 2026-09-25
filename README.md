@@ -101,6 +101,21 @@ documented in [`.env.example`](.env.example).
 
 ![The Interchange workbench answer panel: "Answer 1, hybrid, 4 passages" marked Grounded, the stub-engine reply citing rail-edi-notes.md, and an engine / cost / telemetry line with request and audit ids above Copy-run-as-JSON and Copy-link controls.](docs/img/workbench.jpg)
 
+### Nightly reindex (launchd)
+A personal corpus changes under your hands, so it needs a rebuild story
+([ADR-0016](docs/adr/0016-corpus-profiles-as-portable-data.md)). On macOS, install a
+nightly full reindex (03:30, read-only against the corpus, $0 — local embeddings, no
+metered call) for one profile:
+
+```bash
+scripts/launchd/install.sh brain                          # install + load the agent
+launchctl kickstart -k gui/$(id -u)/ai.interchange.reindex-brain  # run it now
+scripts/launchd/install.sh brain --uninstall              # remove it
+```
+
+`INTERCHANGE_CORS_ORIGINS` (comma-separated; empty/unset keeps today's same-origin-only
+behaviour) lets a separate-origin personal frontend call `/ask` and `/health`.
+
 ## Architecture (MVP)
 
 ```

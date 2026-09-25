@@ -21,6 +21,7 @@ import contextvars
 import fnmatch
 import hashlib
 import hmac
+import logging
 import os
 import pathlib
 import posixpath
@@ -29,16 +30,39 @@ import secrets
 import sys
 import tempfile
 import threading
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import observability as obs  # no-op unless INTERCHANGE_TRACING=1 (ADR-0009)
+
+logger = logging.getLogger(__name__)
 
 # --- config ---------------------------------------------------------------
 DOCS_DIR = pathlib.Path(
     os.environ.get("INTERCHANGE_DOCS_DIR", str(pathlib.Path(__file__).parent / "docs"))
 )
-CHROMA_DIR = str(pathlib.Path(__file__).parent / ".chroma")
+
+
+def chroma_dir_from_env(env: Mapping[str, str] | None = None) -> str:
+    """The Chroma index location: ``INTERCHANGE_CHROMA_DIR`` (expanduser'd) or the
+    repo's ``.chroma``. One store per machine, N collections (ADR-0016) — so several
+    corpora share a single store instead of one per checkout, and a personal index
+    can sit under ``~/.interchange/`` next to the profiles overlay."""
+    env = os.environ if env is None else env
+    raw = env.get("INTERCHANGE_CHROMA_DIR")
+    if raw:
+        return os.path.expanduser(raw)
+    return str(pathlib.Path(__file__).parent / ".chroma")
+
+
+CHROMA_DIR = chroma_dir_from_env()
 COLLECTION = os.environ.get("INTERCHANGE_COLLECTION", "edi")
+
+# Per-profile retrieval default + tool allow-list, set by apply_profile() when a
+# profile is applied; Slices 3-4 consume them (ADR-0016). None until then.
+PROFILE_RETRIEVAL = None
+PROFILE_TOOLS = None
 
 # Headless `claude -p` must never run inside the calling repo: a child Claude
 # session started in a repo loads that repo's `.claude/` project settings and
@@ -66,6 +90,15 @@ _ACTIVE_COLLECTION: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def active_collection() -> str:
     """The collection name this request should read/write."""
     return _ACTIVE_COLLECTION.get() or COLLECTION
+
+
+# The persona a single request answers with. `answer_detail` sets it per request
+# from the corpus's profile (ADR-0016 slice 3), so one process answers `hotel`
+# with a hotel voice and `edi` with the rail default — without mutating module
+# state. Unset, the module `SYSTEM_PROMPT` default (below) wins.
+_ACTIVE_PERSONA: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "persona", default=None
+)
 # Model IDs (2026): "claude-sonnet-5" (balanced), "claude-haiku-4-5-20251001" (cheaper/faster).
 MODEL = os.environ.get("INTERCHANGE_MODEL", "claude-sonnet-5")
 CHUNK_CHARS = 1200          # max section-body size before a section is windowed
@@ -96,6 +129,50 @@ SYSTEM_PROMPT = (
     "Cite the source filename in [brackets] after each claim. If the context "
     "does not contain the answer, say so plainly — do not invent details."
 )
+
+
+def system_prompt() -> str:
+    """The system prompt this request should answer with: the active persona (set
+    per request by ``answer_detail`` from the corpus's profile, ADR-0016 slice 3)
+    or the module rail default ``SYSTEM_PROMPT`` when no persona is in scope."""
+    return _ACTIVE_PERSONA.get() or SYSTEM_PROMPT
+
+
+def apply_profile(name: str) -> dict:
+    """Apply a corpus profile in-process, before any index/answer/eval work (ADR-0016).
+
+    Rebinds the module globals that steer the pipeline so a single process can serve
+    any corpus without the export-before-``.env`` dance: sets ``os.environ`` from the
+    profile, and rebinds ``DOCS_DIR`` / ``COLLECTION`` / ``GOLDEN_PATH`` plus the
+    Slices-3/4 defaults ``PROFILE_RETRIEVAL`` / ``PROFILE_TOOLS``. A relative
+    ``golden`` resolves against the repo root; an absolute/expanded one is used as
+    is; a profile with no ``golden`` leaves ``GOLDEN_PATH`` unchanged. Any
+    ``SystemExit`` / ``KeyError`` from ``load_profile`` (already plain) propagates.
+    """
+    global DOCS_DIR, COLLECTION, GOLDEN_PATH, PROFILE_RETRIEVAL, PROFILE_TOOLS
+    # Lazy import: a2a_agent.profiles imports from interchange (MODES), so a
+    # top-level import here would cycle.
+    from a2a_agent.profiles import (
+        load_profile,
+        profile_env,
+        profile_retrieval,
+        profile_tools,
+    )
+
+    profile = load_profile(name)
+    for key, value in profile_env(profile).items():
+        os.environ[key] = value
+    os.environ["DEMO_PROFILE"] = name
+
+    DOCS_DIR = pathlib.Path(profile["docs_dir"])
+    COLLECTION = str(profile["collection"])
+    golden = profile.get("golden")
+    if golden:
+        gp = pathlib.Path(golden)
+        GOLDEN_PATH = gp if gp.is_absolute() else pathlib.Path(__file__).parent / gp
+    PROFILE_RETRIEVAL = profile_retrieval(profile)
+    PROFILE_TOOLS = profile_tools(profile)
+    return profile
 
 
 # --- ingest ---------------------------------------------------------------
@@ -424,6 +501,7 @@ def resolve_link(target: str, from_source: str, known: set[str],
 def build_index():
     import chromadb
 
+    started = time.monotonic()
     patterns = load_ignore_patterns(DOCS_DIR)
     files = discover_files(DOCS_DIR, patterns)
     if not files:
@@ -488,13 +566,21 @@ def build_index():
                           "links": links_meta, "title": title})
     col.add(ids=ids, documents=docs, metadatas=metas)
     indexed = len(files) - skipped - secret_skipped
+    secs = time.monotonic() - started
     summary = (
         f"Indexed {len(docs)} chunks from {indexed} files -> {CHROMA_DIR}"
+        f" in {secs:.1f} s"
         f" ({skipped} skipped: no extractable text; "
         f"{secret_skipped} skipped: credential pattern"
         f"; {unresolved} wikilinks unresolved)"
     )
+    # A rebuild that lands the SAME chunk count is invisible to a long-running
+    # snapshot cache (ADR-0016 consequence: corpus_snapshot keys on count). Drop
+    # this collection's entry so the next retrieval re-reads the fresh index.
+    with _SNAP_LOCK:
+        _SNAP_CACHE.pop(collection_name, None)
     print(summary)
+    return summary
 
 
 # --- retrieval primitives (pure, offline, $0) -----------------------------
@@ -1361,7 +1447,7 @@ def _generate_api(user_content: str) -> dict:
     resp = anthropic.Anthropic().messages.create(
         model=MODEL,
         max_tokens=1000,
-        system=SYSTEM_PROMPT,
+        system=system_prompt(),
         messages=[{"role": "user", "content": user_content}],
     )
     return {
@@ -1445,7 +1531,7 @@ def _generate_claude_code(user_content: str) -> dict:
         sys.exit("claude CLI not found. Install Claude Code, or use --engine api.")
     try:
         proc = subprocess.run(
-            ["claude", "-p", user_content, "--append-system-prompt", SYSTEM_PROMPT,
+            ["claude", "-p", user_content, "--append-system-prompt", system_prompt(),
              "--output-format", "json", "--setting-sources", "user"],
             capture_output=True, text=True, timeout=CLAUDE_CODE_TIMEOUT_S,
             cwd=headless_cwd(),
@@ -1545,6 +1631,7 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
     before (the ``top-k=`` line prints the effective ``top_k``)."""
     # scope a per-call corpus override to this request only
     token = _ACTIVE_COLLECTION.set(collection) if collection else None
+    persona_token = None
     try:
         import time as _time
 
@@ -1560,6 +1647,21 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
         pinned = bool(pin)
         corpus = active_collection()
         stages: list[dict] = []
+
+        # Persona follows the corpus (ADR-0016 slice 3): resolve the profile for this
+        # collection and answer in its voice, resetting it in the `finally` below.
+        # profile_for_collection reads profiles.yaml each call (small file); do NOT
+        # memoise by (overlay mtime) now — leave that to a later slice if it bites.
+        # Any failure falls back to no persona (the rail SYSTEM_PROMPT); never raises.
+        try:
+            from a2a_agent.profiles import profile_for_collection, profile_persona
+            _profile = profile_for_collection(corpus)
+            if _profile is not None:
+                _persona = profile_persona(_profile)
+                if _persona is not None:
+                    persona_token = _ACTIVE_PERSONA.set(_persona)
+        except Exception as exc:  # profile lookup is best-effort — never fail a request
+            logger.debug("persona lookup failed for corpus %r: %s", corpus, exc)
 
         def _emit(stage, ms, telemetry, detail, data, hits=None, scoring=None):
             """Append a stage frame and, if a listener is attached, hand it the same
@@ -1712,14 +1814,40 @@ def answer_detail(question: str, engine: str = "api", explain: bool = False,
                 "scoring": scoring, "mode": mode, "mode_effective": mode_effective,
                 "k": top_k, "pinned": pinned}
     finally:
+        if persona_token is not None:
+            _ACTIVE_PERSONA.reset(persona_token)
         if token is not None:
             _ACTIVE_COLLECTION.reset(token)
 
 
-def answer(question: str, engine: str = "api", explain: bool = False) -> str:
+def answer(question: str, engine: str = "api", explain: bool = False, *,
+           mode: str | None = None, rerank_backend: str | None = None) -> str:
     """Run the RAG pipeline and return just the answer text (the CLI contract:
-    a blocked request comes back as the '🛑 Request blocked …' string)."""
-    return answer_detail(question, engine=engine, explain=explain)["text"]
+    a blocked request comes back as the '🛑 Request blocked …' string).
+
+    Retrieval mode follows the applied profile (ADR-0016): ``mode=None`` resolves to
+    ``PROFILE_RETRIEVAL["mode"]`` when a profile has been applied, else ``"hybrid"``;
+    an explicit ``mode`` wins. ``rerank_backend`` resolves the same way — explicit,
+    then ``PROFILE_RETRIEVAL["rerank"]``, then the ``INTERCHANGE_RERANK`` default
+    (``RERANK_BACKEND``) — but only matters when reranking. When the effective mode is
+    ``hybrid+rerank`` and the reranker cannot import, this fails **plainly** (fail
+    closed, ADR-0016) with the ``requirements-rerank.txt`` hint rather than silently
+    downgrading to plain hybrid. The HTTP path calls ``answer_detail`` directly with
+    its own explicit mode/rerank and is unaffected."""
+    eff_mode = mode if mode is not None else (
+        PROFILE_RETRIEVAL["mode"] if PROFILE_RETRIEVAL else "hybrid")
+    eff_rerank = rerank_backend
+    if eff_mode == "hybrid+rerank" and eff_rerank is None:
+        eff_rerank = (PROFILE_RETRIEVAL or {}).get("rerank") or RERANK_BACKEND
+    if eff_mode == "hybrid+rerank" or eff_rerank is not None:
+        reason = reranker_import_error()
+        if reason is not None:
+            sys.exit(
+                f"retrieval mode 'hybrid+rerank' needs the reranker, which is "
+                f"unavailable: {reason}. Install it: pip install -r requirements-rerank.txt"
+            )
+    return answer_detail(question, engine=engine, explain=explain,
+                         mode=eff_mode, rerank_backend=eff_rerank)["text"]
 
 
 # --- evaluation (offline, $0) ---------------------------------------------
@@ -1840,6 +1968,67 @@ def run_eval(golden_path=GOLDEN_PATH, k: int = TOP_K, *, collection: str | None 
             _ACTIVE_COLLECTION.reset(token)
 
 
+def golden_add(golden_path, question: str, expected: list[str], kind: str,
+               note: str | None, collection: str) -> dict:
+    """Append one *validated* row to a golden set — eval-as-you-go (ADR-0016 slice 5).
+
+    A miss becomes a golden row only if its expected source is actually indexed, so a
+    personal corpus grows a measured baseline instead of accreting typos. Every entry in
+    ``expected`` is checked against the sources ``collection`` holds (``_known_sources``
+    over that collection); the first unknown one is a plain ``SystemExit``. A duplicate
+    ``question`` — matched case-insensitively and whitespace-normalised against the rows
+    already in ``golden_path`` — is refused the same way. The appended row uses the same
+    schema as the existing rows: ``expected_source`` for a single source, else
+    ``expected_sources`` (a list), plus ``kind`` and, when given, ``note``. The golden
+    file is created (with its parent) when absent. Returns the appended row."""
+    import json as _json
+
+    golden_path = pathlib.Path(golden_path)
+    expected = list(expected)
+
+    # 1) every expected source must be indexed in this collection.
+    token = _ACTIVE_COLLECTION.set(collection) if collection else None
+    try:
+        known = _known_sources()
+    finally:
+        if token is not None:
+            _ACTIVE_COLLECTION.reset(token)
+    unknowns = unknown_expected([{"expected_sources": expected}], known)
+    if unknowns:
+        sys.exit(
+            f"expected source {unknowns[0]!r} is not indexed in collection "
+            f"{collection!r}; reindex the corpus or fix the path"
+        )
+
+    # 2) reject a duplicate question (exact match, case-insensitive, ws-normalised).
+    def _norm(q: str) -> str:
+        return " ".join(str(q).split()).lower()
+
+    target = _norm(question)
+    if golden_path.exists():
+        for line in golden_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if _norm(_json.loads(line).get("question", "")) == target:
+                sys.exit(f"duplicate question already in {golden_path.name}: {question!r}")
+
+    # 3) append one row in the existing schema.
+    row: dict = {"question": question}
+    if len(expected) == 1:
+        row["expected_source"] = expected[0]
+    else:
+        row["expected_sources"] = expected
+    row["kind"] = kind
+    if note:
+        row["note"] = note
+
+    golden_path.parent.mkdir(parents=True, exist_ok=True)
+    with golden_path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(row) + "\n")
+    return row
+
+
 # --- cli ------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Interchange — RAG Q&A MVP")
@@ -1851,14 +2040,20 @@ def main():
                          "set) and exit; measures the retriever, $0 (ADR-0007/0014)")
     ap.add_argument("--k", type=int, default=TOP_K, metavar="N",
                     help=f"hit@k cutoff for --eval (default {TOP_K})")
-    ap.add_argument("--golden", default=GOLDEN_PATH, metavar="PATH",
+    ap.add_argument("--profile", metavar="NAME", default=None,
+                    help="apply a corpus profile in-process before any work: collection, "
+                         "docs dir, golden set, retrieval default, tools (ADR-0016); "
+                         "replaces the export-before-.env dance")
+    ap.add_argument("--golden", default=None, metavar="PATH",
                     help="golden set for --eval (default eval/golden.jsonl)")
     ap.add_argument("--corpus", default=None, metavar="NAME",
                     help="Chroma collection --eval reads (default: the module collection); "
                          "the override is scoped to the run and never mutates module state")
-    ap.add_argument("--mode", choices=list(MODES) + ["all"], default="hybrid",
-                    help="retrieval mode for --eval: hybrid (RRF, default), dense, bm25, or "
-                         "'all' to run each and print a comparison table (ADR-0014)")
+    ap.add_argument("--mode", choices=list(MODES) + ["all"], default=None,
+                    help="retrieval mode: hybrid (RRF), dense, bm25, hybrid+rerank, or "
+                         "'all' (eval-only) to run each and print a comparison table "
+                         "(ADR-0014). Unset resolves to the applied profile's declared "
+                         "default (else hybrid); an explicit --mode wins (ADR-0016)")
     ap.add_argument("--depth", type=int, default=EVAL_DEPTH, metavar="N",
                     help=f"how deep --eval looks for the expected source, for rank + near-miss "
                          f"(default {EVAL_DEPTH})")
@@ -1885,13 +2080,53 @@ def main():
                          "until it has enough. Runs on your Claude subscription via headless Claude Code "
                          "+ an MCP tool server — no API key (ADR-0003). The hand-rolled API loop lives in "
                          "agent.py as Lesson 02 reference.")
+    ap.add_argument("--golden-add", action="store_true",
+                    help="append one validated row to the profile's golden set and exit — "
+                         "eval-as-you-go (ADR-0016). Requires --question and at least one "
+                         "--expected; the source must already be indexed in the corpus")
+    ap.add_argument("--question", metavar="Q",
+                    help="the question for --golden-add")
+    ap.add_argument("--expected", action="append", metavar="SRC",
+                    help="an expected source for --golden-add (repeatable; one source -> "
+                         "expected_source, several -> expected_sources)")
+    ap.add_argument("--kind", choices=["exact", "paraphrase", "linked", "duplicate-title"],
+                    default="paraphrase", metavar="KIND",
+                    help="the retrieval facet a --golden-add row probes (default: paraphrase)")
+    ap.add_argument("--note", metavar="TEXT",
+                    help="an optional annotation stored on the --golden-add row")
     args = ap.parse_args()
+
+    # Apply the profile in-process before every branch (audit/eval/grade/.env/
+    # reindex/ask/REPL), so collection, docs dir, golden, retrieval default and
+    # tools are all set before any work (ADR-0016).
+    if args.profile:
+        apply_profile(args.profile)
+    # Resolve the golden set AFTER the profile ran, so the rebound GOLDEN_PATH wins;
+    # an explicit --golden still wins over both.
+    golden = args.golden or GOLDEN_PATH
 
     def respond(q: str) -> str:
         if args.agent:
             from agent_sub import answer_agentic_sub
             return answer_agentic_sub(q, explain=args.explain)
-        return answer(q, engine=args.engine, explain=args.explain)
+        # `--mode all` is eval-only; for --ask/REPL pass the (possibly None) mode
+        # through so an explicit --mode works for asking and None resolves to the
+        # profile default inside answer() (ADR-0016).
+        return answer(q, engine=args.engine, explain=args.explain, mode=args.mode)
+
+    if args.golden_add:
+        # Append a validated golden row after the profile is applied, before --eval.
+        if not args.question or not args.expected:
+            ap.error("--golden-add requires --question and at least one --expected")
+        row = golden_add(golden, args.question, args.expected, args.kind, args.note,
+                         args.corpus or COLLECTION)
+        import json as _json
+
+        print(_json.dumps(row))
+        count = sum(1 for line in pathlib.Path(golden).read_text().splitlines()
+                    if line.strip())
+        print(f"golden set now has {count} row(s): {golden}")
+        return
 
     if args.audit:
         from enterprise import audit_summary
@@ -1900,7 +2135,11 @@ def main():
         return
 
     if args.eval:
-        if args.mode == "all":
+        # Resolve the eval mode: an explicit --mode (including "all") wins; unset falls
+        # to the applied profile's declared default, else hybrid (ADR-0016).
+        eval_mode = args.mode if args.mode is not None else (
+            PROFILE_RETRIEVAL["mode"] if PROFILE_RETRIEVAL else "hybrid")
+        if eval_mode == "all":
             # include hybrid+rerank only if its backend imports; else skip it with
             # one honest line and run the rest (its optional deps are not in the gate).
             modes = list(MODES)
@@ -1910,7 +2149,7 @@ def main():
                 if skip_reason is not None:
                     modes.remove("hybrid+rerank")
             summaries = {
-                m: run_eval(golden_path=args.golden, k=args.k, collection=args.corpus,
+                m: run_eval(golden_path=golden, k=args.k, collection=args.corpus,
                             mode=m, depth=args.depth, pool=args.pool,
                             rerank_n=args.rerank_n, quiet=True)
                 for m in modes
@@ -1933,8 +2172,8 @@ def main():
             elif skip_reason is not None:
                 print(f"\n  hybrid+rerank skipped: {skip_reason}")
         else:
-            run_eval(golden_path=args.golden, k=args.k, collection=args.corpus,
-                     mode=args.mode, depth=args.depth, pool=args.pool,
+            run_eval(golden_path=golden, k=args.k, collection=args.corpus,
+                     mode=eval_mode, depth=args.depth, pool=args.pool,
                      rerank_n=args.rerank_n)
         return
 

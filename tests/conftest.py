@@ -68,6 +68,19 @@ def context() -> dict:
 
 
 @pytest.fixture(autouse=True)
+def isolated_profiles(monkeypatch):
+    """Disable the machine's personal profiles overlay for every test.
+
+    The corpus-profiles overlay (``INTERCHANGE_PROFILES``, ADR-0016) defaults to
+    ``~/.interchange/profiles.yaml``, which exists on some dev machines and defines
+    extra profiles. Setting the env var to the empty string turns the overlay off so
+    the gate reads only the committed ``profiles.yaml`` — never this machine's real
+    overlay. A test that wants an overlay monkeypatches the var back to a tmp file.
+    """
+    monkeypatch.setenv("INTERCHANGE_PROFILES", "")
+
+
+@pytest.fixture(autouse=True)
 def isolated_audit_log(tmp_path, monkeypatch):
     """Redirect the audit log to a throwaway tmp file so no test writes the real one.
 

@@ -36,6 +36,7 @@ one and both stay in the log.
 | [0013](0013-a2a-agent-interop.md) | Agent-to-agent interop over A2A with signed Agent Cards | Accepted → **A2A 1.0 + 0.3 compat, signed card, pinned kid** |
 | [0014](0014-vault-corpus-and-measured-ablations.md) | Vault corpus: recursive ingestion, read-only profile, measured ablations | Accepted → **reranker trigger fired (hit@1 11→15/18); link expansion regressed, deferred** |
 | [0015](0015-browser-workbench-surface.md) | Browser workbench over the same governed pipeline — scored retrieval, policy tier, streamed stages | Accepted → **vendored no-build Preact at `/ui`, `POST /ask/stream` SSE, env-is-policy** |
+| [0016](0016-corpus-profiles-as-portable-data.md) | Corpus profiles as portable data — overlay, index dir, persona, retrieval, tools | Accepted → **`INTERCHANGE_PROFILES` overlay, `INTERCHANGE_CHROMA_DIR`, `--profile`, per-profile persona/retrieval/tools** |
 
 _(MCP tool server — was pencilled as a separate ADR — was implemented under
 ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
@@ -47,5 +48,7 @@ ADR-0003's amendment; see `mcp_server.py`. No standalone ADR needed.)_
 - Link-aware expansion — trigger: linked rows missing under hybrid+rerank on a future golden set (ADR-0014: naive 1-hop regressed hit@1 by 5 rows, deferred)
 - TypeSafe Jev reranker — **measured 2026-09-22 (ADR-0014):** parity with the local cross-encoder on the vault golden set; stays opt-in, metered (~3¢/run)
 - Retrieve-vs-long-context router + agentic multi-hop — trigger: corpus outgrows the context window
+- Incremental reindex by content hash — trigger: measured full rebuild > 5 min or intra-day freshness needed (ADR-0016)
+- Cross-corpus fan-out query — trigger: same question asked of two corpora repeatedly (ADR-0016)
 
 _Template: copy [`0000-template.md`](0000-template.md)._

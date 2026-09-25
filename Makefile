@@ -4,7 +4,7 @@
 
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 PROFILE ?= rail
-MODE ?= hybrid
+MODE ?=
 K ?= 4
 
 .PHONY: help test a2a-demo a2a-keygen a2a-accept workbench-accept reindex eval
@@ -15,8 +15,8 @@ help:
 	@echo "make a2a-keygen              - print a fresh ES256 signing pair for the deploy"
 	@echo "make a2a-accept              - run the A2A acceptance gate"
 	@echo "make workbench-accept [WB_ENGINE=stub]   - real-engine acceptance gate for /ui + /ask/stream; ~5 claude -p calls, \$$0 marginal (stub = \$$0 self-test)"
-	@echo "make reindex PROFILE=vault   - build the index for PROFILE (export INTERCHANGE_VAULT_DIR first for vault)"
-	@echo "make eval PROFILE=vault      - retrieval eval for PROFILE (MODE=hybrid|dense|bm25|hybrid+links|all K=4)"
+	@echo "make reindex PROFILE=vault   - build the index for PROFILE in-process (--profile); set INTERCHANGE_CHROMA_DIR to relocate the store; vault needs INTERCHANGE_VAULT_DIR only when no overlay sets its docs_dir"
+	@echo "make eval PROFILE=vault      - retrieval eval for PROFILE (MODE=hybrid|dense|bm25|hybrid+links|hybrid+rerank|all K=4)"
 
 test:
 	$(PY) -m pytest -q
@@ -43,7 +43,7 @@ a2a-accept:
 workbench-accept:
 	@bash scripts/workbench-accept.sh
 
-reindex:  ## Build the index for PROFILE (export INTERCHANGE_VAULT_DIR first for PROFILE=vault)
-	@eval "$$($(PY) -m a2a_agent.profiles $(PROFILE) --export)" && $(PY) interchange.py --reindex
-eval:     ## Retrieval eval for PROFILE: MODE=hybrid|dense|bm25|hybrid+links|all K=4
-	@eval "$$($(PY) -m a2a_agent.profiles $(PROFILE) --export)" && $(PY) interchange.py --eval --corpus "$$INTERCHANGE_COLLECTION" --golden "$$INTERCHANGE_GOLDEN" --mode $(MODE) --k $(K)
+reindex:  ## Build the index for PROFILE in-process (--profile); PROFILE=vault needs INTERCHANGE_VAULT_DIR only when no overlay sets its docs_dir
+	@$(PY) interchange.py --profile $(PROFILE) --reindex
+eval:     ## Retrieval eval for PROFILE: MODE=hybrid|dense|bm25|hybrid+links|hybrid+rerank|all (unset = the profile's declared default) K=4 (corpus + golden come from the profile)
+	@$(PY) interchange.py --profile $(PROFILE) --eval $(if $(MODE),--mode $(MODE)) --k $(K)
