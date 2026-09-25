@@ -52,6 +52,16 @@ don't yet (see the [README scorecard](README.md#enterprise-readiness-scorecard))
   ledger; two bugs worth teaching — contextvars across threads and `+` in a query
   string; mapped to OWASP LLM01/output-handling/excessive-agency/RAG-poisoning and
   NIST AI RMF GOVERN/MEASURE.
+- **[Lesson 09 — Many corpora, one engine; and the retrieval unit is not the context unit](lessons/09-corpora-and-context.md)** —
+  ADR-0014 to 0018 as one lesson: a corpus becomes a profile (path, persona, retrieval
+  mode, tool allow-list) with a private overlay so personal corpora never enter the
+  tree; a real vault as a corpus with a credential guard and measured ablations
+  (reranker trigger fired, link expansion rejected); a passage-level metric that saw
+  what `hit@k` could not; an ingest merge measured and rejected; and context assembled
+  by note under a fair-share budget after ranking — brain context@4 2/7 → 7/7, graded
+  answers 40% → 93%, zero ranking changes — with two rules the design review added
+  (pins never assemble; sources follow the included set) and the judge bug the gate
+  caught; mapped to OWASP LLM01/LLM06/LLM08 and NIST GOVERN/MEASURE/MANAGE.
 
 ## The curriculum = the 8-dimension enterprise-readiness framework
 
