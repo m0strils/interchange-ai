@@ -427,3 +427,29 @@ explicit write flag on `enterprise.audit`; HTTP retrieval mode from the profile 
 lock semantics are extended to it; the P2 checklist from the plan (stdin prompt, snapshot
 threading, cache bound and build stamp, overlay deep-merge). The `research` corpus stays on
 `chunks` until a retrieved-text injection scan exists. The brain corpus freeze is lifted.
+
+## Update 2026-09-24 — People/Interviews are indexed as `chunks_only`, not ignored
+The stated assumption above — *"`30-Career/People/` and `30-Career/Interviews/` leave the
+brain index"* — is **overturned** (the ADR-0004 rule: correct a stated assumption here and
+re-measure). The owner's decision: **index those folders, but never assemble them whole.**
+Ignoring them made third-party names and interview notes unretrievable at all; the real
+requirement is narrower — they may be *found* and *quoted as the retrieved chunk*, they must
+never be *sent whole* into a prompt. A profile now names source prefixes that are always
+treated as chunks inside `notes` mode: a new `retrieval.chunks_only: [prefix, …]` (POSIX-path
+prefixes relative to the corpus root, normalised to forward slashes). In `notes` mode a hit
+whose `source` starts with any prefix is **seeded only** — passes 2 and 3 never expand it (no
+whole note, no neighbours), its reason is `chunks_only`, and it is counted separately on
+`Assembled` (in `chunks_in`/`chunks_out`, never in `fallbacks`, since it is not a note that
+tried and failed). The match is path-rooted, so `30-Career/PeopleX/` does not match
+`30-Career/People/`. `profile_retrieval` validates the list (non-empty strings), `resolve_context`
+carries it through, and `policy.clamp_context` passes it untouched (it is not a budget/mode knob).
+The **brain overlay change**: drop the `ignore: ["30-Career/People/", "30-Career/Interviews/"]`
+list (both folders return to the index) and add `retrieval.chunks_only: ["30-Career/People/",
+"30-Career/Interviews/"]`. Both career folders are currently empty, so `chunks_only`
+fires on nothing and the measured brain run is materially unchanged. **Re-measured** 2026-09-24
+(k=4, `hybrid`/`notes`/20,000/16,000): 31 files / 514 chunks; hit@1 17/25, hit@4 25/25,
+passage@4 3/6, context@4 7/7, note@4 21/24, mean chars 13,027 (max 19,761), lead 0.29 — the
+gate columns match Slice E exactly; mean chars and lead drift +0.5%/-0.01 against Slice E's
+12,961/0.30 from ordinary corpus growth (514 vs the frozen control's 513 chunks), not from
+`chunks_only`. The mechanism is proved by the offline `context_assembly.feature` scenarios and
+takes effect the moment either folder holds a note.

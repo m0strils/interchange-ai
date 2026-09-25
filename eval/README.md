@@ -130,6 +130,17 @@ one injected snapshot (`eval_snapshot`, stubbed offline — so a `chunks` run an
 
 `n/a` is printed wherever a denominator is 0.
 
+**`chunks_only` prefixes (ADR-0018 Update 2026-09-24).** A profile's `retrieval.chunks_only`
+lists POSIX-path prefixes (relative to the corpus root, e.g. `30-Career/People/`) whose notes
+are **indexed but never assembled whole**: in `notes` context a hit whose `source` starts with
+any prefix is **seeded only** — its own chunk is included, but passes 2 and 3 never expand it to
+the whole note or to neighbours — and its assembly reason is `chunks_only`. The eval follows the
+applied profile's list, so it scores exactly what a request would; a `chunks_only` source counts
+in the seeded chunks but is **not** a fallback (it never tried to grow), so it does not inflate the
+`fallbacks` line. The prefix match is path-rooted, so `30-Career/PeopleX/` does not match
+`30-Career/People/`. This keeps third-party names and interview notes retrievable as chunks while
+never sending them whole.
+
 ### The run log — `eval-runs.jsonl`
 
 Every `--eval` run **appends one JSON line** to `eval/eval-runs.jsonl` (gitignored,

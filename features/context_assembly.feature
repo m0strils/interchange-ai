@@ -148,3 +148,48 @@ Feature: Context assembly with a budget (ADR-0018)
     When I clamp the context settings
     Then the clamped mode is "chunks"
     And the clamped budget is 24000
+
+  # ADR-0018 Update 2026-09-24: People/Interviews are INDEXED but never assembled whole.
+  # A profile names source prefixes that are always treated as chunks inside `notes` mode.
+  Scenario: A chunks-only prefix is seeded but never expanded
+    Given the chunks-only prefix "30-Career/People/"
+    And a note "30-Career/People/jane.md" with chunks "p0, p1, p2"
+    And a note "other.md" with chunks "o0, o1"
+    And a hit into "30-Career/People/jane.md" chunk 0
+    And a hit into "other.md" chunk 0
+    When I assemble the context in "notes" mode with budget 20000 and note-max 16000
+    Then the reason for "30-Career/People/jane.md" is "chunks_only"
+    And only 1 chunk of "30-Career/People/jane.md" is included
+    And the reason for "other.md" is "whole"
+
+  Scenario: Chunks-only does not count as a fallback
+    Given the chunks-only prefix "30-Career/People/"
+    And a note "30-Career/People/jane.md" with chunks "p0, p1"
+    And a note "other.md" with chunks "o0, o1"
+    And a hit into "30-Career/People/jane.md" chunk 0
+    And a hit into "other.md" chunk 0
+    When I assemble the context in "notes" mode with budget 20000 and note-max 16000
+    Then fallbacks is 0
+    And the chunks_only count is 1
+
+  Scenario: The prefix match is on the POSIX path from the corpus root
+    Given the chunks-only prefix "30-Career/People/"
+    And a note "30-Career/PeopleX/bob.md" with chunks "x0, x1, x2"
+    And a hit into "30-Career/PeopleX/bob.md" chunk 0
+    When I assemble the context in "notes" mode with budget 20000 and note-max 16000
+    Then the reason for "30-Career/PeopleX/bob.md" is "whole"
+
+  Scenario Outline: Validation rejects a non-list or empty string prefix
+    Given a profile whose retrieval chunks_only is "<kind>"
+    When I read the profile's retrieval
+    Then a retrieval ValueError names "chunks_only"
+
+    Examples:
+      | kind       |
+      | not-a-list |
+      | empty-item |
+
+  Scenario: resolve_context carries chunks_only from the profile and clamp leaves it intact
+    Given a fake profile whose retrieval names chunks-only prefix "30-Career/People/"
+    When I resolve the context for corpus "edi"
+    Then the resolved chunks_only is "30-Career/People/"
